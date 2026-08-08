@@ -3,21 +3,32 @@ const express = require('express')
 const cors = require('cors')
 const helmet = require('helmet')
 const morgan = require('morgan')
+
+
 // const path = require('path')
 
 const app = express()
 
 // ─── Security & Middleware ─────────────────────────────────────────────────────
 app.use(helmet())
-app.use(cors({
-  origin: [
+const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:3000',
-  // 'https://varadhi-tracker.vercel.app',
-  'https://varadhi-project-tracker-frontend.onrender.com'
-],
+  'http://127.0.0.1:3000',
+]
+
+app.use(cors({
+  origin: process.env.NODE_ENV === 'development'
+    ? true
+    : function (origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true)
+        } else {
+          callback(new Error('Not allowed by CORS'))
+        }
+      },
   credentials: true,
-  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization']
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }))
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'))
 app.use(express.json({ limit: '10mb' }))
@@ -46,6 +57,8 @@ app.use('/api/documents',     require('./routes/documents.routes'))
 app.use('/api/reports',       require('./routes/reports.routes'))
 app.use('/api/notifications', require('./routes/notifications.routes'))
 app.use('/api/folders',       require('./routes/folders.routes'))
+app.use('/api/leave-management', require('./routes/leave-management.routes'))
+app.use('/api/time-management', require('./routes/time-management.routes'))
 
 // ─── Error Handlers ────────────────────────────────────────────────────────────
 const { errorHandler, notFound } = require('./middleware/error.middleware')
