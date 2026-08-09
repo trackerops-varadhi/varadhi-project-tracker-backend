@@ -1,0 +1,13 @@
+{
+  "//": "Without this, nodemon's default watch is *.* across the whole backend directory, so ANY js/json write restarts the server -- including ad-hoc scripts, test harnesses, log files and editor scratch files. Each restart drops in-flight requests and briefly refuses connections, which reads exactly like a backend crash. Watching only src/ keeps restarts tied to real source changes.",
+  "watch": ["src"],
+  "ext": "js,mjs,cjs,json",
+  "ignore": [
+    "src/**/*.test.js",
+    "scripts/**",
+    "logs/**",
+    "*.log",
+    "*.tmp.js"
+  ],
+  "delay": 300
+}

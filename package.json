@@ -6,23 +6,37 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "db:migrate": "node src/config/migrate.js"
+    "db:migrate": "node src/config/migrate.js",
+    "db:migrate:module2": "node src/config/migrate-module2.js",
+    "test:sibling-sync": "node scripts/sibling-sync.test.js",
+    "test:concurrency": "node scripts/concurrency.test.js",
+    "db:migrate:push-retry": "node src/config/migrate-push-retry.js",
+    "test:push-retry": "node scripts/push-retry.test.js",
+    "db:migrate:module45": "node src/config/migrate-module45.js",
+    "test:crypto": "node scripts/crypto.test.js",
+    "test:calendar": "node scripts/calendar-sync.test.js",
+    "test:teams": "node scripts/teams-webhook.test.js"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.109.0",
+    "axios": "^1.19.0",
     "bcryptjs": "^2.4.3",
-    "cloudinary": "^2.10.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
+    "mime-types": "^3.0.2",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
+    "node-cron": "^4.6.0",
     "nodemailer": "^9.0.3",
-    "pg": "^8.13.0"
+    "pg": "^8.13.0",
+    "web-push": "^3.6.7",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.7"

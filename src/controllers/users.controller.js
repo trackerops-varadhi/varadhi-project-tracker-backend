@@ -2,6 +2,17 @@ const pool = require('../config/db')
 const bcrypt = require('bcryptjs')
 const { successResponse, errorResponse } = require('../utils/response')
 const { sendInviteEmail } = require('../utils/sendEmail')
+const { notifyByRoles, NOTIFICATION_TYPES } = require('../utils/notification-engine')
+
+// Notifications must never turn a successful action into a 500, so every
+// dispatch block runs inside this guard instead of the handler's try/catch.
+const notifySafely = async (fn) => {
+  try {
+    await fn()
+  } catch (err) {
+    console.error('[notifications] users.controller:', err.message)
+  }
+}
 
 exports.getAllUsers = async (req, res) => {
   try {
@@ -63,6 +74,18 @@ exports.inviteUser = async (req, res) => {
  
     await sendInviteEmail(email, inviteLink)
 
+    await notifySafely(async () => {
+      await notifyByRoles(
+        ['admin'],
+        NOTIFICATION_TYPES.USER_INVITED,
+        'User invited',
+        `${req.user.name} invited ${email} as ${role || 'employee'}.`,
+        '/users',
+        'low',
+        { excludeUserId: req.user.id }
+      )
+    })
+
     return successResponse(
       res,
       { email, role },
@@ -84,6 +107,19 @@ exports.updateRole = async (req, res) => {
       [role, req.params.id]
     )
     if (!result.rows[0]) return errorResponse(res, 'User not found.', 404)
+
+    await notifySafely(async () => {
+      await notifyByRoles(
+        ['admin'],
+        NOTIFICATION_TYPES.USER_ROLE_CHANGED,
+        'User role changed',
+        `${req.user.name} changed ${result.rows[0].name}'s role to ${role}.`,
+        '/users',
+        'low',
+        { excludeUserId: req.user.id }
+      )
+    })
+
     return successResponse(res, result.rows[0], 'Role updated successfully.')
   } catch (err) { return errorResponse(res, err.message, 500) }
 }
@@ -91,13 +127,28 @@ exports.updateRole = async (req, res) => {
 exports.deactivateUser = async (req, res) => {
   try {
     if (req.params.id === req.user.id) return errorResponse(res, 'Cannot deactivate yourself.')
-    const current = await pool.query('SELECT status FROM users WHERE id = $1', [req.params.id])
+    const current = await pool.query('SELECT name, status FROM users WHERE id = $1', [req.params.id])
     if (!current.rows[0]) return errorResponse(res, 'User not found.', 404)
     const newStatus = current.rows[0].status === 'active' ? 'inactive' : 'active'
     const result = await pool.query(
       'UPDATE users SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING id, name, status',
       [newStatus, req.params.id]
     )
+
+    if (newStatus === 'inactive') {
+      await notifySafely(async () => {
+        await notifyByRoles(
+          ['admin'],
+          NOTIFICATION_TYPES.USER_REMOVED,
+          'User deactivated',
+          `${req.user.name} deactivated ${current.rows[0].name}.`,
+          '/users',
+          'low',
+          { excludeUserId: req.user.id }
+        )
+      })
+    }
+
     return successResponse(res, result.rows[0], `User ${newStatus === 'active' ? 'activated' : 'deactivated'} successfully.`)
   } catch (err) { return errorResponse(res, err.message, 500) }
 }

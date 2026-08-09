@@ -4,6 +4,7 @@
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ─── Users ─────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS users (
@@ -93,14 +94,91 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 
 -- ─── Notifications ─────────────────────────────────────────────────────────────
+-- Widths and nullability match migrate.js. `message` is nullable and `priority`
+-- / `read_at` are present because notification-engine.js#writeInApp inserts
+-- priority and notifications.controller.js#markAsRead writes read_at.
 CREATE TABLE IF NOT EXISTS notifications (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  type          VARCHAR(100) NOT NULL,
+  title         VARCHAR(255) NOT NULL,
+  message       TEXT,
+  is_read       BOOLEAN DEFAULT FALSE,
+  read_at       TIMESTAMP,
+  user_id       UUID REFERENCES users(id) ON DELETE CASCADE,
+  link_to       VARCHAR(500),
+  priority      VARCHAR(20) DEFAULT 'normal',
+  -- Module 2: actionable notifications. `actions` is a snapshot of the buttons
+  -- offered at creation time, not derived from `type` on read.
+  actions       JSONB,
+  action_taken  VARCHAR(32),
+  actioned_at   TIMESTAMP,
+  action_result JSONB,
+  action_source VARCHAR(20),
+  created_at    TIMESTAMP DEFAULT NOW()
+);
+
+-- ─── Notification Action Log (audit) ───────────────────────────────────────────
+-- ON DELETE SET NULL, not CASCADE: deleteNotification hard-deletes rows and a
+-- cascading audit log would erase the evidence it exists to preserve.
+CREATE TABLE IF NOT EXISTS notification_action_log (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  notification_id UUID REFERENCES notifications(id) ON DELETE SET NULL,
+  user_id         UUID REFERENCES users(id)         ON DELETE SET NULL,
+  action          VARCHAR(32) NOT NULL,
+  source          VARCHAR(20),
+  outcome         VARCHAR(32) NOT NULL,
+  resource_type   VARCHAR(32),
+  resource_id     UUID,
+  detail          JSONB,
+  created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- ─── Notification Snoozes ──────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS notification_snoozes (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  notification_id UUID REFERENCES notifications(id) ON DELETE CASCADE,
+  user_id         UUID REFERENCES users(id)         ON DELETE CASCADE,
+  wake_at         TIMESTAMP NOT NULL,
+  delivered_at    TIMESTAMP,
+  created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- ─── Notification Preferences ──────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS notification_preferences (
+  id                   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id              UUID UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  push_enabled         BOOLEAN DEFAULT TRUE,
+  email_enabled        BOOLEAN DEFAULT FALSE,
+  quiet_hours_enabled  BOOLEAN DEFAULT TRUE,
+  quiet_hours_start    TIME DEFAULT '22:00',
+  quiet_hours_end      TIME DEFAULT '07:00',
+  task_assigned        BOOLEAN DEFAULT TRUE,
+  task_status_changed  BOOLEAN DEFAULT TRUE,
+  comment_added        BOOLEAN DEFAULT TRUE,
+  due_date_reminder    BOOLEAN DEFAULT TRUE,
+  project_updates      BOOLEAN DEFAULT TRUE,
+  task_reassigned      BOOLEAN DEFAULT TRUE,
+  due_date_changed     BOOLEAN DEFAULT TRUE,
+  priority_changed     BOOLEAN DEFAULT TRUE,
+  mentions             BOOLEAN DEFAULT TRUE,
+  review_requests      BOOLEAN DEFAULT TRUE,
+  approvals            BOOLEAN DEFAULT TRUE,
+  overdue              BOOLEAN DEFAULT TRUE,
+  documents            BOOLEAN DEFAULT TRUE,
+  system_notifications BOOLEAN DEFAULT TRUE,
+  reminder_lead_days   INTEGER,
+  created_at           TIMESTAMP DEFAULT NOW(),
+  updated_at           TIMESTAMP DEFAULT NOW()
+);
+
+-- ─── Push Subscriptions ─────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS push_subscriptions (
   id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  type       VARCHAR(50) NOT NULL,
-  title      VARCHAR(200) NOT NULL,
-  message    TEXT NOT NULL,
-  is_read    BOOLEAN DEFAULT FALSE,
   user_id    UUID REFERENCES users(id) ON DELETE CASCADE,
-  link_to    VARCHAR(300),
+  endpoint   TEXT UNIQUE NOT NULL,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  user_agent TEXT,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -112,6 +190,14 @@ CREATE INDEX IF NOT EXISTS idx_comments_task_id    ON comments(task_id);
 CREATE INDEX IF NOT EXISTS idx_documents_project   ON documents(project_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user  ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_read  ON notifications(user_id, is_read);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_unread  ON notifications(user_id) WHERE is_read = false;
+-- Serves notification-engine.js#isDuplicate, which runs on every dispatch.
+CREATE INDEX IF NOT EXISTS idx_notifications_dedupe       ON notifications(user_id, type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user    ON push_subscriptions(user_id);
+CREATE INDEX IF NOT EXISTS idx_action_log_notification    ON notification_action_log(notification_id);
+CREATE INDEX IF NOT EXISTS idx_action_log_user_created    ON notification_action_log(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_snoozes_due                ON notification_snoozes(wake_at) WHERE delivered_at IS NULL;
 
 -- ─── Updated_at trigger ────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION update_updated_at()

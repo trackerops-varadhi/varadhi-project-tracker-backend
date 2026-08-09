@@ -1,7 +1,8 @@
 services:
   - type: web
     name: varadhi-backend
-    env: node
+    # `runtime` replaced the deprecated `env` key in Render's current schema.
+    runtime: node
     buildCommand: npm install
     startCommand: npm start
     envVars:
@@ -13,8 +14,53 @@ services:
           property: connectionString
       - key: JWT_SECRET
         generateValue: true
+      # Must be the real deployed frontend origin: it is both a CORS allowed
+      # origin (server.js) and the base for deep links in push/email payloads
+      # (notification-engine.js APP_URL).
       - key: FRONTEND_URL
-        value: https://your-frontend-url.vercel.app
+        value: https://varadhi-project-tracker-frontend.onrender.com
+      # Web push. Without BOTH keys the push channel degrades to a silent
+      # no-op, so a deploy that omits them ships with push quietly disabled.
+      # Generate once with `npx web-push generate-vapid-keys`, then paste the
+      # values into the Render dashboard — sync:false keeps them out of git.
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        value: mailto:support@varadhi.local
+      # Module 2 inline push actions. Optional — falls back to a value derived
+      # from JWT_SECRET when unset.
+      - key: NOTIFICATION_ACTION_TTL_HOURS
+        value: "72"
+      # One switch for every background sweep, including the Module 4 calendar
+      # sync and the Module 5 Teams retry/digest jobs.
+      - key: ENABLE_CRON
+        value: "true"
+      # ── Modules 4 & 5 ──────────────────────────────────────────────────────
+      # Encrypts calendar OAuth tokens and Teams webhook URLs at rest. Optional
+      # (falls back to a value derived from JWT_SECRET) but STRONGLY recommended
+      # here: with the fallback, regenerating JWT_SECRET on a redeploy would
+      # make every stored token undecryptable and force all users to reconnect.
+      # sync:false keeps it out of git — set it in the Render dashboard.
+      - key: ENCRYPTION_KEY
+        sync: false
+      # Public origin of THIS service. Required for OAuth: the redirect URI
+      # registered with Google/Microsoft must match exactly, and deriving it
+      # from the inbound request is wrong behind Render's proxy.
+      - key: API_PUBLIC_URL
+        value: https://varadhi-backend.onrender.com
+      # Calendar providers. WITHOUT these the module runs against a built-in
+      # mock calendar rather than failing — real sync stays off until they are
+      # set in the dashboard.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: MS_CLIENT_ID
+        sync: false
+      - key: MS_CLIENT_SECRET
+        sync: false
 
 databases:
   - name: varadhi-db
