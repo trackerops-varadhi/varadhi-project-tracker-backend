@@ -410,6 +410,37 @@ await client.query(`
   CREATE INDEX IF NOT EXISTS idx_teams_delivery_due
     ON teams_delivery_log (next_attempt_at) WHERE status = 'pending'
 `)
+
+    // Leave requests table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS leave_requests (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        start_date DATE NOT NULL,
+        end_date DATE NOT NULL,
+        days INTEGER NOT NULL DEFAULT 1,
+        type VARCHAR(30) NOT NULL DEFAULT 'annual',
+        reason TEXT NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `)
+
+    // Time logs table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS time_logs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+        date DATE NOT NULL,
+        hours NUMERIC(5,2) NOT NULL DEFAULT 0,
+        note TEXT,
+        check_in TIMESTAMP,
+        check_out TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `)
+
     await client.query('COMMIT')
     console.log('✅ All tables created successfully!')
     process.exit(0)

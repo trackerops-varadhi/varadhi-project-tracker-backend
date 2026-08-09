@@ -182,6 +182,33 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- ─── Leave Requests ───────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS leave_requests (
+  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id    UUID REFERENCES users(id) ON DELETE CASCADE,
+  start_date DATE NOT NULL,
+  end_date   DATE NOT NULL,
+  days       INTEGER NOT NULL DEFAULT 1,
+  type       VARCHAR(30) NOT NULL DEFAULT 'annual',
+  reason     TEXT NOT NULL,
+  status     VARCHAR(20) NOT NULL DEFAULT 'pending'
+             CHECK (status IN ('pending', 'approved', 'rejected')),
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- ─── Time Logs ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS time_logs (
+  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id    UUID REFERENCES users(id) ON DELETE CASCADE,
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  date       DATE NOT NULL,
+  hours      NUMERIC(5,2) NOT NULL DEFAULT 0,
+  note       TEXT,
+  check_in   TIMESTAMP,
+  check_out  TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
 -- ─── Indexes for performance ───────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_tasks_project_id    ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_id   ON tasks(assignee_id);

@@ -23,8 +23,9 @@ app.use(helmet())
 // NOTE: `allowedHeaders` is an allow-list. The action endpoint deliberately
 // carries its credential in the request BODY rather than a custom header,
 // because adding one here would be required for the preflight to pass.
-const ALLOWED_ORIGINS = [
+const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:3000',
+  'http://127.0.0.1:3000',
   // Both deployment targets are listed: CLAUDE.md documents Vercel while the
   // service has also been served from Render. Keeping both avoids a silent
   // CORS failure whenever FRONTEND_URL and the live origin disagree.
@@ -33,10 +34,18 @@ const ALLOWED_ORIGINS = [
 ].filter(Boolean)
 
 app.use(cors({
-  origin: [...new Set(ALLOWED_ORIGINS)],
+  origin: process.env.NODE_ENV === 'development'
+    ? true
+    : function (origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true)
+        } else {
+          callback(new Error('Not allowed by CORS'))
+        }
+      },
   credentials: true,
-  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization']
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }))
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'))
 app.use(express.json({ limit: '10mb' }))
@@ -68,6 +77,8 @@ app.use('/api/notification-actions', require('./routes/notification-actions.rout
 app.use('/api/folders',       require('./routes/folders.routes'))
 app.use('/api/calendar',      require('./routes/calendar.routes'))
 app.use('/api/teams',         require('./routes/teams.routes'))
+app.use('/api/leave-management', require('./routes/leave-management.routes'))
+app.use('/api/time-management', require('./routes/time-management.routes'))
 
 // ─── Error Handlers ────────────────────────────────────────────────────────────
 const { errorHandler, notFound } = require('./middleware/error.middleware')
