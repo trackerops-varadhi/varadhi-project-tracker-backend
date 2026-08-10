@@ -1,6 +1,10 @@
 const pool = require('../config/db')
 const { successResponse, errorResponse } = require('../utils/response')
 
+// Guards `WHERE id = $1` against a non-UUID path param, which Postgres rejects
+// with `invalid input syntax for type uuid` rather than returning no rows.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 const mapLeaveRequest = (row) => ({
   id: row.id,
   userId: row.user_id,
@@ -22,7 +26,9 @@ exports.getLeaveRequests = async (req, res) => {
     let where = 'WHERE 1=1'
     const params = []
 
-    if (currentUser.role.toLowerCase() === 'employee') {
+    // `role` is nullable in migrate.js (no NOT NULL), so a null would crash
+    // .toLowerCase(). Default to the most restrictive scope on absence.
+    if ((currentUser.role || 'employee').toLowerCase() === 'employee') {
       params.push(currentUser.id)
       where += ` AND lr.user_id = $${params.length}`
     }
@@ -45,7 +51,8 @@ exports.getLeaveRequests = async (req, res) => {
 
     return successResponse(res, result.rows.map(mapLeaveRequest))
   } catch (err) {
-    return errorResponse(res, err.message, 500)
+    console.error('getLeaveRequests error:', err)
+    return errorResponse(res, 'Failed to load leave requests.', 500)
   }
 }
 
@@ -53,12 +60,23 @@ exports.createLeaveRequest = async (req, res) => {
   try {
     const { startDate, endDate, type, reason } = req.body
 
-    if (!startDate || !endDate || !reason) {
+    if (!startDate || !endDate || !reason || !String(reason).trim()) {
       return errorResponse(res, 'Start date, end date, and reason are required.')
     }
 
     const start = new Date(startDate)
     const end = new Date(endDate)
+
+    // Unparseable dates previously produced days = NaN, which the driver
+    // rejected against `days INTEGER NOT NULL` as an opaque 500.
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      return errorResponse(res, 'Start date and end date must be valid dates.')
+    }
+    // A reversed range used to be silently clamped to 1 day by Math.max.
+    if (end < start) {
+      return errorResponse(res, 'End date cannot be earlier than start date.')
+    }
+
     const days = Math.max(1, Math.round((end - start) / 86400000) + 1)
 
     const result = await pool.query(
@@ -85,7 +103,8 @@ exports.createLeaveRequest = async (req, res) => {
 
     return successResponse(res, mapLeaveRequest(created.rows[0]), 'Leave request created successfully.', 201)
   } catch (err) {
-    return errorResponse(res, err.message, 500)
+    console.error('createLeaveRequest error:', err)
+    return errorResponse(res, 'Failed to create leave request.', 500)
   }
 }
 
@@ -113,13 +132,19 @@ async function notifyManagersAboutLeave(leaveRow) {
 
 exports.updateLeaveRequestStatus = async (req, res) => {
   try {
-    if (req.user.role.toLowerCase() === 'employee') {
+    if ((req.user.role || 'employee').toLowerCase() === 'employee') {
       return errorResponse(res, 'You are not authorized to update leave status.', 403)
     }
 
     const { status } = req.body
     if (!['pending', 'approved', 'rejected'].includes(status)) {
       return errorResponse(res, 'Please provide a valid leave status.')
+    }
+
+    // A non-UUID path param made Postgres throw `invalid input syntax for
+    // type uuid`, which surfaced as a 500 instead of a 404.
+    if (!UUID_RE.test(String(req.params.id || ''))) {
+      return errorResponse(res, 'Leave request not found.', 404)
     }
 
     const result = await pool.query(
@@ -158,6 +183,7 @@ exports.updateLeaveRequestStatus = async (req, res) => {
 
     return successResponse(res, mapLeaveRequest(refreshed.rows[0]), 'Leave request updated successfully.')
   } catch (err) {
-    return errorResponse(res, err.message, 500)
+    console.error('updateLeaveRequestStatus error:', err)
+    return errorResponse(res, 'Failed to update leave request.', 500)
   }
 }
