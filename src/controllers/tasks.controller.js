@@ -83,6 +83,149 @@ exports.getAllTasks = async (req, res) => {
   } catch (err) { return errorResponse(res, err.message, 500) }
 }
 
+// Employees see only their own tasks, matching getAllTasks. Returns the
+// `WHERE` fragment and its params so the stats queries below stay in sync
+// with the list endpoint's scoping.
+const taskScope = (currentUser) => {
+  if ((currentUser.role || 'employee').toLowerCase() === 'employee') {
+    return { where: 'WHERE assignee_id = $1', params: [currentUser.id] }
+  }
+  return { where: '', params: [] }
+}
+
+// Aggregate counts for the stats rows on /tasks, /kanban and the dashboard.
+// "blocked" is not a task status in this schema (todo/in_progress/in_review/
+// completed) — overdue-and-not-completed is the closest real signal, so that
+// is what we return rather than inventing a value.
+exports.getTaskStats = async (req, res) => {
+  try {
+    const { where, params } = taskScope(req.user)
+    const result = await pool.query(
+      `
+        SELECT
+          COUNT(*)::int AS total,
+          COUNT(CASE WHEN status = 'completed'   THEN 1 END)::int AS completed,
+          COUNT(CASE WHEN status = 'in_progress' THEN 1 END)::int AS in_progress,
+          COUNT(CASE WHEN status = 'in_review'   THEN 1 END)::int AS in_review,
+          COUNT(CASE WHEN status = 'todo'        THEN 1 END)::int AS todo,
+          COUNT(CASE WHEN due_date < NOW() AND status <> 'completed' THEN 1 END)::int AS overdue,
+          COUNT(CASE WHEN completed_at > NOW() - INTERVAL '7 days'   THEN 1 END)::int AS completed_this_week
+        FROM tasks
+        ${where}
+      `,
+      params
+    )
+    const r = result.rows[0]
+    const pct = (n) => (r.total > 0 ? Math.round((n / r.total) * 100) : 0)
+
+    return successResponse(res, {
+      total: r.total,
+      completed: r.completed,
+      inProgress: r.in_progress,
+      inReview: r.in_review,
+      todo: r.todo,
+      overdue: r.overdue,
+      completedThisWeek: r.completed_this_week,
+      completedPercent: pct(r.completed),
+      inProgressPercent: pct(r.in_progress),
+      inReviewPercent: pct(r.in_review),
+      todoPercent: pct(r.todo),
+      overduePercent: pct(r.overdue),
+    })
+  } catch (err) {
+    console.error('getTaskStats error:', err)
+    return errorResponse(res, 'Failed to load task stats.', 500)
+  }
+}
+
+// Counts per priority. Every level in the schema CHECK is returned even at
+// zero, so the UI renders a stable set of rows instead of shifting layout.
+exports.getPriorityBreakdown = async (req, res) => {
+  try {
+    const { where, params } = taskScope(req.user)
+    const result = await pool.query(
+      `SELECT priority, COUNT(*)::int AS count FROM tasks ${where} GROUP BY priority`,
+      params
+    )
+
+    const counts = Object.fromEntries(result.rows.map((r) => [r.priority, r.count]))
+    const total = result.rows.reduce((sum, r) => sum + r.count, 0)
+
+    const priorities = ['critical', 'high', 'medium', 'low'].map((level) => ({
+      priority: level,
+      count: counts[level] || 0,
+      percent: total > 0 ? Math.round(((counts[level] || 0) / total) * 100) : 0,
+    }))
+
+    return successResponse(res, { total, priorities })
+  } catch (err) {
+    console.error('getPriorityBreakdown error:', err)
+    return errorResponse(res, 'Failed to load priority breakdown.', 500)
+  }
+}
+
+// Tasks with a due date ahead, for the three "upcoming deadlines" cards.
+// Overdue items are included first (negative daysLeft) because a deadline
+// card that hides overdue work is actively misleading.
+exports.getUpcomingTasks = async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 5, 50)
+    const days = Math.min(Number(req.query.days) || 30, 365)
+
+    const isEmployee = (req.user.role || 'employee').toLowerCase() === 'employee'
+    const params = [days, limit]
+    let scope = ''
+    if (isEmployee) {
+      params.push(req.user.id)
+      scope = ` AND t.assignee_id = $${params.length}`
+    }
+
+    const result = await pool.query(
+      `
+        SELECT t.id, t.title, t.due_date, t.priority, t.status,
+               p.name AS project_name, u.name AS assignee_name
+        FROM tasks t
+        LEFT JOIN projects p ON t.project_id = p.id
+        LEFT JOIN users u ON t.assignee_id = u.id
+        WHERE t.due_date IS NOT NULL
+          AND t.status <> 'completed'
+          AND t.due_date < NOW() + ($1 || ' days')::interval
+          ${scope}
+        ORDER BY t.due_date ASC
+        LIMIT $2
+      `,
+      params
+    )
+
+    const startOfToday = new Date()
+    startOfToday.setHours(0, 0, 0, 0)
+
+    return successResponse(
+      res,
+      result.rows.map((r) => {
+        const due = new Date(r.due_date)
+        const dueMidnight = new Date(due)
+        dueMidnight.setHours(0, 0, 0, 0)
+        const daysLeft = Math.round((dueMidnight - startOfToday) / 86400000)
+        return {
+          id: r.id,
+          title: r.title,
+          dueDate: r.due_date,
+          priority: r.priority,
+          status: r.status,
+          projectName: r.project_name,
+          assigneeName: r.assignee_name,
+          daysLeft,
+          isOverdue: daysLeft < 0,
+        }
+      })
+    )
+  } catch (err) {
+    console.error('getUpcomingTasks error:', err)
+    return errorResponse(res, 'Failed to load upcoming tasks.', 500)
+  }
+}
+
 exports.getTaskById = async (req, res) => {
   try {
     const task = await getTaskWithDetails(req.params.id)

@@ -30,6 +30,75 @@ exports.getAllUsers = async (req, res) => {
   } catch (err) { return errorResponse(res, err.message, 500) }
 }
 
+// Team composition + top performers, backing the cards around the /users list.
+// Route-gated to admin/manager, same as getAllUsers.
+exports.getUserStats = async (req, res) => {
+  try {
+    const [totals, performers, recent] = await Promise.all([
+      pool.query(`
+        SELECT
+          COUNT(*)::int AS total,
+          COUNT(CASE WHEN status = 'active'   THEN 1 END)::int AS active,
+          COUNT(CASE WHEN status = 'inactive' THEN 1 END)::int AS inactive,
+          COUNT(CASE WHEN status = 'invited'  THEN 1 END)::int AS invited,
+          COUNT(CASE WHEN role   = 'admin'    THEN 1 END)::int AS admins,
+          COUNT(CASE WHEN role   = 'manager'  THEN 1 END)::int AS managers,
+          COUNT(CASE WHEN role   = 'employee' THEN 1 END)::int AS employees
+        FROM users
+      `),
+      // Ranked by completed tasks. Only active users can be "performing", and
+      // users with zero completions are excluded so the card is never padded
+      // with names that have done nothing.
+      pool.query(`
+        SELECT u.id, u.name, u.email, u.role, u.avatar,
+               COUNT(t.id)::int AS completed_tasks,
+               (SELECT COUNT(*) FROM tasks WHERE assignee_id = u.id)::int AS total_tasks
+        FROM users u
+        JOIN tasks t ON t.assignee_id = u.id AND t.status = 'completed'
+        WHERE u.status = 'active'
+        GROUP BY u.id, u.name, u.email, u.role, u.avatar
+        ORDER BY completed_tasks DESC, u.name
+        LIMIT 5
+      `),
+      pool.query(`
+        SELECT id, name, email, role, avatar, status, created_at
+        FROM users
+        WHERE status <> 'invited'
+        ORDER BY created_at DESC
+        LIMIT 5
+      `),
+    ])
+
+    const t = totals.rows[0]
+    return successResponse(res, {
+      totals: t,
+      topPerformers: performers.rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        email: r.email,
+        role: r.role,
+        avatar: r.avatar,
+        completedTasks: r.completed_tasks,
+        totalTasks: r.total_tasks,
+        // Share of their own assigned work that is finished.
+        score: r.total_tasks > 0 ? Math.round((r.completed_tasks / r.total_tasks) * 100) : 0,
+      })),
+      recentlyJoined: recent.rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        email: r.email,
+        role: r.role,
+        avatar: r.avatar,
+        status: r.status,
+        createdAt: r.created_at,
+      })),
+    })
+  } catch (err) {
+    console.error('getUserStats error:', err)
+    return errorResponse(res, 'Failed to load user stats.', 500)
+  }
+}
+
 exports.getUserById = async (req, res) => {
   try {
     const result = await pool.query(

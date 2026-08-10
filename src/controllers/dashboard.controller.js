@@ -83,6 +83,146 @@ exports.getStats = async (req, res) => {
 
 
 
+// Per-project health, derived from real task completion and end dates.
+// Classification (no scheduling table exists, so this is computed):
+//   delayed  - end_date has passed with open tasks remaining
+//   at_risk  - due within 7 days and less than half the tasks are done
+//   on_track - everything else
+exports.getProjectHealth = async (req, res) => {
+  try {
+    const isEmployee = (req.user.role || 'employee').toLowerCase() === 'employee'
+    const params = []
+    // Employees only see projects they have tasks on, matching getStats.
+    let scope = ''
+    if (isEmployee) {
+      params.push(req.user.id)
+      scope = `WHERE p.id IN (SELECT project_id FROM tasks WHERE assignee_id = $1)`
+    }
+
+    const result = await pool.query(
+      `
+        SELECT
+          p.id,
+          p.name,
+          p.status,
+          p.end_date,
+          COUNT(t.id)::int AS total_tasks,
+          COUNT(CASE WHEN t.status = 'completed' THEN 1 END)::int AS completed_tasks
+        FROM projects p
+        LEFT JOIN tasks t ON t.project_id = p.id
+        ${scope}
+        GROUP BY p.id, p.name, p.status, p.end_date
+        ORDER BY p.name
+      `,
+      params
+    )
+
+    const projects = result.rows.map((r) => {
+      const total = r.total_tasks
+      const done = r.completed_tasks
+      const percent = total > 0 ? Math.round((done / total) * 100) : 0
+      const open = total - done
+
+      let health = 'on_track'
+      if (r.end_date) {
+        const end = new Date(r.end_date)
+        const daysLeft = Math.ceil((end - new Date()) / 86400000)
+        if (daysLeft < 0 && open > 0) health = 'delayed'
+        else if (daysLeft <= 7 && percent < 50) health = 'at_risk'
+      }
+      if (r.status === 'completed') health = 'on_track'
+
+      return {
+        id: r.id,
+        name: r.name,
+        status: r.status,
+        endDate: r.end_date,
+        totalTasks: total,
+        completedTasks: done,
+        percent,
+        health,
+      }
+    })
+
+    // Overall percentage across every task in scope — drives the gauge.
+    const totals = projects.reduce(
+      (acc, p) => ({ done: acc.done + p.completedTasks, all: acc.all + p.totalTasks }),
+      { done: 0, all: 0 }
+    )
+    const overallPercent = totals.all > 0 ? Math.round((totals.done / totals.all) * 100) : 0
+
+    return successResponse(res, { overallPercent, projects })
+  } catch (err) {
+    console.error('getProjectHealth error:', err)
+    return errorResponse(res, 'Failed to load project health.', 500)
+  }
+}
+
+// Gantt geometry computed from real project start/end dates. Bar offsets are
+// returned as percentages of the overall window so the client does no date
+// math. Projects missing either date are excluded — they cannot be placed.
+exports.getGantt = async (req, res) => {
+  try {
+    const isEmployee = (req.user.role || 'employee').toLowerCase() === 'employee'
+    const params = []
+    let scope = 'WHERE p.start_date IS NOT NULL AND p.end_date IS NOT NULL'
+    if (isEmployee) {
+      params.push(req.user.id)
+      scope += ` AND p.id IN (SELECT project_id FROM tasks WHERE assignee_id = $1)`
+    }
+
+    const result = await pool.query(
+      `
+        SELECT p.id, p.name, p.status, p.start_date, p.end_date,
+               COUNT(t.id)::int AS total_tasks,
+               COUNT(CASE WHEN t.status = 'completed' THEN 1 END)::int AS completed_tasks
+        FROM projects p
+        LEFT JOIN tasks t ON t.project_id = p.id
+        ${scope}
+        GROUP BY p.id, p.name, p.status, p.start_date, p.end_date
+        ORDER BY p.start_date
+      `,
+      params
+    )
+
+    if (result.rows.length === 0) {
+      return successResponse(res, { windowStart: null, windowEnd: null, projects: [] })
+    }
+
+    const starts = result.rows.map((r) => new Date(r.start_date).getTime())
+    const ends = result.rows.map((r) => new Date(r.end_date).getTime())
+    const windowStart = Math.min(...starts)
+    const windowEnd = Math.max(...ends)
+    const span = Math.max(1, windowEnd - windowStart)
+
+    const projects = result.rows.map((r) => {
+      const s = new Date(r.start_date).getTime()
+      const e = new Date(r.end_date).getTime()
+      const total = r.total_tasks
+      return {
+        id: r.id,
+        name: r.name,
+        status: r.status,
+        startDate: r.start_date,
+        endDate: r.end_date,
+        // Percentages of the shared window, ready for CSS left/width.
+        offsetPercent: Math.round(((s - windowStart) / span) * 10000) / 100,
+        widthPercent: Math.max(1, Math.round(((e - s) / span) * 10000) / 100),
+        percent: total > 0 ? Math.round((r.completed_tasks / total) * 100) : 0,
+      }
+    })
+
+    return successResponse(res, {
+      windowStart: new Date(windowStart).toISOString(),
+      windowEnd: new Date(windowEnd).toISOString(),
+      projects,
+    })
+  } catch (err) {
+    console.error('getGantt error:', err)
+    return errorResponse(res, 'Failed to load gantt data.', 500)
+  }
+}
+
 exports.getActivity = async (req, res) => {
   try {
 
