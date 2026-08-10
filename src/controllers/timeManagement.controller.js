@@ -1,5 +1,9 @@
 const pool = require('../config/db')
 const { successResponse, errorResponse } = require('../utils/response')
+const {
+  dispatchNotification,
+  NOTIFICATION_TYPES,
+} = require('../utils/notification-engine')
 
 // `hours` is NUMERIC(5,2) — anything at or above 1000 overflows the column and
 // surfaces as a raw Postgres 500. A day cannot exceed 24h anyway, so cap there
@@ -152,12 +156,18 @@ exports.createTimeLog = async (req, res) => {
       return errorResponse(res, 'Failed to retrieve created time log.', 500)
     }
 
-    // Add a notification for the user about the submitted time (best-effort)
+    // Confirm the entry through the notification engine (best-effort), so it
+    // respects preferences, quiet hours and dedupe like every other module.
     try {
       const row = created.rows[0]
-      const title = 'Time Submitted'
-      const message = `Your time entry for ${row.date} (${row.hours}h) was recorded.`
-      await pool.query(`INSERT INTO notifications (type, title, message, user_id, link_to) VALUES ($1,$2,$3,$4,$5)`, ['time_log', title, message, row.user_id, '/time-management'])
+      await dispatchNotification(
+        row.user_id,
+        NOTIFICATION_TYPES.TIME_LOGGED,
+        'Time Submitted',
+        `Your time entry for ${row.date} (${row.hours}h) was recorded.`,
+        '/time-management',
+        'low'
+      )
     } catch (e) {
       console.error('time log notify error:', e.message)
     }
@@ -269,12 +279,17 @@ exports.checkOut = async (req, res) => {
       [updated.rows[0].id]
     )
 
-    // notify user
+    // Confirm the checkout through the engine (best-effort).
     try {
       const row = refreshed.rows[0]
-      const title = 'Time Submitted'
-      const message = `Your time entry for ${row.date} (${row.hours}h) was recorded.`
-      await pool.query(`INSERT INTO notifications (type, title, message, user_id, link_to) VALUES ($1,$2,$3,$4,$5)`, ['time_log', title, message, row.user_id, '/time-management'])
+      await dispatchNotification(
+        row.user_id,
+        NOTIFICATION_TYPES.TIME_LOGGED,
+        'Time Submitted',
+        `Your time entry for ${row.date} (${row.hours}h) was recorded.`,
+        '/time-management',
+        'low'
+      )
     } catch (e) { console.error('notify error:', e.message) }
 
     return successResponse(res, mapTimeLog(refreshed.rows[0]), 'Checked out.')

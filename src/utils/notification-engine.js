@@ -170,6 +170,14 @@ const NOTIFICATION_TYPES = {
   CALENDAR_SYNC_FAILED: 'calendar_sync_failed',
   CALENDAR_CONFLICT_DETECTED: 'calendar_conflict_detected',
   TEAMS_WEBHOOK_DISABLED: 'teams_webhook_disabled',
+
+  // Leave & time (Modules 6/7). These previously bypassed the engine
+  // entirely — the controllers wrote to `notifications` with a raw
+  // pool.query, so preferences, quiet hours, dedupe, push and Teams fan-out
+  // were all skipped for them.
+  LEAVE_REQUESTED: 'leave_requested',
+  LEAVE_STATUS_CHANGED: 'leave_status_changed',
+  TIME_LOGGED: 'time_logged',
 };
 
 // Maps a notification type to the opt-out category checkbox it belongs to
@@ -209,6 +217,12 @@ const TYPE_CATEGORY_MAP = {
   [NOTIFICATION_TYPES.SYSTEM_PUSH_FAILURE]: 'system_notifications',
   [NOTIFICATION_TYPES.SYSTEM_BACKUP_FAILURE]: 'system_notifications',
   [NOTIFICATION_TYPES.SYSTEM_STORAGE_WARNING]: 'system_notifications',
+  // No dedicated leave/time preference columns exist on
+  // notification_preferences, so these ride the existing system category
+  // rather than silently ignoring the user's settings.
+  [NOTIFICATION_TYPES.LEAVE_REQUESTED]: 'system_notifications',
+  [NOTIFICATION_TYPES.LEAVE_STATUS_CHANGED]: 'system_notifications',
+  [NOTIFICATION_TYPES.TIME_LOGGED]: 'system_notifications',
 };
 
 // Event types worth an email, per the spec — everything else stays in-app

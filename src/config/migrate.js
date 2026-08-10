@@ -441,6 +441,90 @@ await client.query(`
       )
     `)
 
+    // ─── Folders (document organisation) ──────────────────────────────────
+    // Deleting a folder sets its documents' folder_id to NULL rather than
+    // deleting them — the files become "unfiled", not lost.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS folders (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name VARCHAR(255) NOT NULL,
+        created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `)
+    // documents.folder_id was added after the documents table shipped, so it
+    // is an ALTER rather than part of the CREATE above.
+    await client.query(`
+      ALTER TABLE documents
+        ADD COLUMN IF NOT EXISTS folder_id UUID REFERENCES folders(id) ON DELETE SET NULL
+    `)
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents (folder_id)
+    `)
+
+    // ─── Notification delivery audit ──────────────────────────────────────
+    // Written by utils/notification-audit.js; one row per dispatch attempt.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS notification_logs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        type VARCHAR(100),
+        title VARCHAR(255),
+        priority VARCHAR(20),
+        status VARCHAR(30) NOT NULL,
+        channels JSONB,
+        error_message TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `)
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_notification_logs_user_created
+        ON notification_logs (user_id, created_at DESC)
+    `)
+
+    // ─── Push delivery retries ────────────────────────────────────────────
+    // Mirrored from migrate-push-retry.js so a from-scratch database matches
+    // a migrated one. Drives utils/push-retry.js's transient-failure sweep.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS push_delivery_retries (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        notification_id UUID REFERENCES notifications(id) ON DELETE CASCADE,
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        subscription_id UUID,
+        payload JSONB NOT NULL,
+        send_options JSONB,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_error TEXT,
+        last_status INTEGER,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `)
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_push_retries_due
+        ON push_delivery_retries (next_attempt_at) WHERE status = 'pending'
+    `)
+
+    // ─── Leave / time indexes ─────────────────────────────────────────────
+    // Both tables shipped without any index; every controller query was a
+    // sequential scan. Mirrored from migrate-leave-time-indexes.js.
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_time_logs_user_date ON time_logs (user_id, date DESC)
+    `)
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_time_logs_project ON time_logs (project_id)
+    `)
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_leave_requests_user_start
+        ON leave_requests (user_id, start_date DESC)
+    `)
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_leave_requests_status ON leave_requests (status)
+    `)
+
     await client.query('COMMIT')
     console.log('✅ All tables created successfully!')
     process.exit(0)

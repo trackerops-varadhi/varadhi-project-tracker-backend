@@ -1,5 +1,10 @@
 const pool = require('../config/db')
 const { successResponse, errorResponse } = require('../utils/response')
+const {
+  dispatchNotification,
+  notifyByRoles,
+  NOTIFICATION_TYPES,
+} = require('../utils/notification-engine')
 
 // Guards `WHERE id = $1` against a non-UUID path param, which Postgres rejects
 // with `invalid input syntax for type uuid` rather than returning no rows.
@@ -109,23 +114,25 @@ exports.createLeaveRequest = async (req, res) => {
 }
 
 // Notify managers when a new leave request is created (helper - non-blocking)
+// Routed through the notification engine rather than a raw INSERT, so leave
+// notifications get the same treatment as every other module: preference
+// checks, quiet hours, dedupe, push delivery and Teams fan-out.
+//
+// notifyByRoles also fixes two bugs in the previous raw version: it includes
+// admins (who were excluded entirely) and filters to status='active' (so
+// deactivated accounts no longer accumulate notifications).
 async function notifyManagersAboutLeave(leaveRow) {
   try {
-    const managers = await pool.query("SELECT id, name FROM users WHERE role = 'manager'")
-    const title = 'New Leave Request'
-    const message = `${leaveRow.user_name} applied for ${leaveRow.type} from ${leaveRow.start_date} to ${leaveRow.end_date}`
-    const link = '/leave-management'
-
-    const inserts = managers.rows.map((mgr) => {
-      return pool.query(
-        `INSERT INTO notifications (type, title, message, user_id, link_to) VALUES ($1,$2,$3,$4,$5)`,
-        ['leave_request', title, message, mgr.id, link]
-      )
-    })
-
-    await Promise.all(inserts)
+    await notifyByRoles(
+      ['admin', 'manager'],
+      NOTIFICATION_TYPES.LEAVE_REQUESTED,
+      'New Leave Request',
+      `${leaveRow.user_name} applied for ${leaveRow.type} from ${leaveRow.start_date} to ${leaveRow.end_date}`,
+      '/leave-management',
+      'normal'
+    )
   } catch (e) {
-    // swallow errors - notifications are best-effort
+    // Best-effort: a notification failure must never fail the request itself.
     console.error('notifyManagersAboutLeave error:', e.message)
   }
 }
@@ -171,12 +178,19 @@ exports.updateLeaveRequestStatus = async (req, res) => {
       [req.params.id]
     )
 
-    // Notify the request owner about status change (best-effort)
+    // Notify the request owner about the decision, through the engine.
     try {
       const refreshedRow = refreshed.rows[0]
-      const title = 'Leave Request Update'
-      const message = `Your leave request (${refreshedRow.start_date} → ${refreshedRow.end_date}) was ${refreshedRow.status}.`
-      await pool.query(`INSERT INTO notifications (type, title, message, user_id, link_to) VALUES ($1,$2,$3,$4,$5)`, ['leave_status', title, message, refreshedRow.user_id, '/leave-management'])
+      await dispatchNotification(
+        refreshedRow.user_id,
+        NOTIFICATION_TYPES.LEAVE_STATUS_CHANGED,
+        'Leave Request Update',
+        `Your leave request (${refreshedRow.start_date} → ${refreshedRow.end_date}) was ${refreshedRow.status}.`,
+        '/leave-management',
+        // An approval/rejection is a decision the requester is waiting on, so
+        // it outranks routine notifications.
+        'high'
+      )
     } catch (e) {
       console.error('notify requester error:', e.message)
     }
