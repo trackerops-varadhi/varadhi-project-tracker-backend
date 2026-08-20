@@ -10,6 +10,17 @@ const {
 // with `invalid input syntax for type uuid` rather than returning no rows.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+// The leave types offered by the Apply Leave modal. Validated here rather than
+// as a DB CHECK so an unknown value is a clean 400 instead of a constraint
+// violation surfacing as a 500 — and because `type` is VARCHAR(30), an
+// overlong string used to blow up with 'value too long for type character
+// varying(30)' at INSERT time. Rejecting off-list values pre-INSERT closes
+// both holes at once.
+const LEAVE_TYPES = ['casual', 'sick', 'earned', 'annual', 'unpaid']
+
+// Full Day / Half Day, stored in leave_requests.day_type.
+const DAY_TYPES = ['full_day', 'half_day']
+
 const mapLeaveRequest = (row) => ({
   id: row.id,
   userId: row.user_id,
@@ -18,6 +29,7 @@ const mapLeaveRequest = (row) => ({
   endDate: row.end_date,
   days: row.days,
   type: row.type,
+  dayType: row.day_type,
   reason: row.reason,
   status: row.status,
   createdAt: row.created_at,
@@ -63,10 +75,30 @@ exports.getLeaveRequests = async (req, res) => {
 
 exports.createLeaveRequest = async (req, res) => {
   try {
-    const { startDate, endDate, type, reason } = req.body
+    // Only these four are read from the body. user_id comes from req.user.id
+    // below — a userId/employee name in the payload is ignored outright, never
+    // trusted as the requester's identity.
+    const { startDate, endDate, type, reason, dayType } = req.body
 
     if (!startDate || !endDate || !reason || !String(reason).trim()) {
       return errorResponse(res, 'Start date, end date, and reason are required.')
+    }
+
+    // `type` is optional and falls back to 'annual' (unchanged behaviour), but
+    // an explicitly supplied value must be on the list.
+    const leaveType = type === undefined || type === null || type === '' ? 'annual' : String(type)
+    if (!LEAVE_TYPES.includes(leaveType)) {
+      return errorResponse(
+        res,
+        `Leave type must be one of: ${LEAVE_TYPES.join(', ')}.`
+      )
+    }
+
+    // Same treatment for dayType: absent means Full Day, present must be valid.
+    const leaveDayType =
+      dayType === undefined || dayType === null || dayType === '' ? 'full_day' : String(dayType)
+    if (!DAY_TYPES.includes(leaveDayType)) {
+      return errorResponse(res, `Day type must be one of: ${DAY_TYPES.join(', ')}.`)
     }
 
     const start = new Date(startDate)
@@ -82,15 +114,29 @@ exports.createLeaveRequest = async (req, res) => {
       return errorResponse(res, 'End date cannot be earlier than start date.')
     }
 
-    const days = Math.max(1, Math.round((end - start) / 86400000) + 1)
+    // A half day only makes sense on a single date — half of a multi-day range
+    // is ambiguous (which day is the half?), so reject it rather than guess.
+    if (leaveDayType === 'half_day' && end.getTime() !== start.getTime()) {
+      return errorResponse(
+        res,
+        'A half-day leave must start and end on the same date.'
+      )
+    }
+
+    // Full day: inclusive count across the range. Half day: always 0.5, since
+    // the range is guaranteed to be a single date by the check above.
+    const days =
+      leaveDayType === 'half_day'
+        ? 0.5
+        : Math.max(1, Math.round((end - start) / 86400000) + 1)
 
     const result = await pool.query(
       `
-        INSERT INTO leave_requests (user_id, start_date, end_date, days, type, reason, status)
-        VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+        INSERT INTO leave_requests (user_id, start_date, end_date, days, type, reason, status, day_type)
+        VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)
         RETURNING id
       `,
-      [req.user.id, startDate, endDate, days, type || 'annual', reason]
+      [req.user.id, startDate, endDate, days, leaveType, reason, leaveDayType]
     )
 
     const created = await pool.query(

@@ -8,6 +8,14 @@ const { Pool, types } = require('pg')
 // — the frontend formatter treats a bare date string as a local calendar day.
 types.setTypeParser(1082, (val) => val)
 
+// NUMERIC/DECIMAL columns (leave_requests.days, time_logs.hours, ...) are
+// returned by pg as strings to preserve arbitrary precision — 3 comes back as
+// "3.0", which renders as "3.0 Days" in the UI and breaks any arithmetic the
+// frontend does on the value. These columns hold small quantities well inside
+// IEEE-754 exact range (days in 0.5 steps, hours in 0.25 steps), so a JS
+// number is a faithful representation. OID 1700 = numeric.
+types.setTypeParser(1700, (val) => (val === null ? null : Number(val)))
+
 const connectionString = process.env.DATABASE_URL
 
 if (!connectionString) {

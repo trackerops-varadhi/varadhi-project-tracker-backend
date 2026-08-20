@@ -418,10 +418,14 @@ await client.query(`
         user_id UUID REFERENCES users(id) ON DELETE CASCADE,
         start_date DATE NOT NULL,
         end_date DATE NOT NULL,
-        days INTEGER NOT NULL DEFAULT 1,
+        -- NUMERIC, not INTEGER: a half-day leave stores days = 0.5, which the
+        -- pg driver rejects against an INTEGER column. See
+        -- migrate-leave-day-type.js, which widens this on existing databases.
+        days NUMERIC(5,1) NOT NULL DEFAULT 1,
         type VARCHAR(30) NOT NULL DEFAULT 'annual',
         reason TEXT NOT NULL,
         status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+        day_type VARCHAR(10) NOT NULL DEFAULT 'full_day' CHECK (day_type IN ('full_day','half_day')),
         created_at TIMESTAMP DEFAULT NOW()
       )
     `)
