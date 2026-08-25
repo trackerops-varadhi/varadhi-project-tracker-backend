@@ -9,6 +9,7 @@ const { startPushRetryCron } = require('./utils/push-retry');
 const { startCalendarCron } = require('./utils/calendar-cron');
 const { startTeamsCron } = require('./utils/teams-cron');
 const { startTeamsFanout } = require('./utils/teams-fanout');
+const { startBugSlaCron } = require('./utils/bug-sla-cron');
 const notificationRoutes = require('./routes/notifications.routes');
 // const path = require('path')
 
@@ -47,7 +48,47 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }))
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'))
+// ─── Request logging ──────────────────────────────────────────────────────────
+// Morgan's built-in `dev`/`combined` formats carry access-log metadata that is
+// noise in a dev terminal (remote address, user-agent, referrer, the raw
+// `"GET /path HTTP/1.1"` request line). Same middleware, same timing source —
+// just a custom format emitting only the four fields that matter, matching the
+// Next.js dev server's line shape:
+//
+//   GET /api/users 200 in 50ms
+//   GET /api/notifications?limit=10 304 in 30ms
+//
+// Only the request log is affected: errors, warnings, startup banners and
+// database/exception output go through console/error.middleware, untouched.
+
+// Colour is opt-out safe: piping to a file, CI or a log collector (no TTY, or
+// NO_COLOR set) falls back to plain text so ANSI escapes never reach the log.
+const logColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
+const paint = (code, text) => (logColor ? `\x1b[${code}m${text}\x1b[0m` : text)
+const statusColor = (status) => {
+  if (status >= 500) return 31 // red
+  if (status >= 400) return 33 // yellow
+  if (status >= 300) return 36 // cyan
+  return 32                    // green
+}
+
+// `req.originalUrl` keeps the querystring and the full mount path, so a request
+// routed through `app.use('/api/notifications', ...)` still logs as
+// `/api/notifications?limit=10` rather than the router-relative `/`.
+morgan.token('clean-url', (req) => req.originalUrl || req.url)
+
+app.use(morgan((tokens, req, res) => {
+  // Status is undefined when the client aborts before a response is written.
+  const status = Number(tokens.status(req, res))
+  const time = tokens['response-time'](req, res)
+
+  return [
+    paint(1, tokens.method(req, res)),
+    tokens['clean-url'](req, res),
+    Number.isNaN(status) ? paint(35, '---') : paint(statusColor(status), status),
+    paint(2, `in ${time == null ? '-' : `${Math.round(Number(time))}ms`}`),
+  ].join(' ')
+}))
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true }))
 
@@ -79,6 +120,8 @@ app.use('/api/calendar',      require('./routes/calendar.routes'))
 app.use('/api/teams',         require('./routes/teams.routes'))
 app.use('/api/leave-management', require('./routes/leave-management.routes'))
 app.use('/api/time-management', require('./routes/time-management.routes'))
+// Module 8: Bugs Finder
+app.use('/api/bugs',          require('./routes/bugs.routes'))
 
 // ─── Error Handlers ────────────────────────────────────────────────────────────
 const { errorHandler, notFound } = require('./middleware/error.middleware')
@@ -87,8 +130,40 @@ app.use(errorHandler)
 
 // ─── Start Server ─────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000
+const bootStartedAt = Date.now()
+
 app.listen(PORT, () => {
-  console.log(`\n🚀 Varadhi Backend running on port ${PORT}`)
+  const env = process.env.NODE_ENV || 'development'
+
+  // Startup banner mirroring the Next.js dev server's shape, so both terminals
+  // read the same way: a titled first line, indented `- key: value` facts, then
+  // a `✓ Ready in Xms` line once everything is wired.
+  console.log('')
+  console.log(paint(36, paint(1, '◆ Varadhi Backend')))
+  console.log(`   - Local:    http://localhost:${PORT}`)
+  console.log(`   - Health:   http://localhost:${PORT}/health`)
+  console.log(`   - Env:      ${env}`)
+
+  // Each start*Cron/fanout announces itself with its own `[name] scheduled ...`
+  // line — seven near-identical lines of boot noise. They are collapsed into a
+  // single count in the banner below, but only the registration lines: this
+  // filter is active for the duration of the calls in this callback and only
+  // swallows the "scheduled"/"subscribed" confirmations. Anything unexpected
+  // still prints, and console.warn/console.error are never touched, so cron
+  // failures and later sweep output stay fully visible.
+  const bootLog = console.log
+  const registered = []
+  console.log = (...args) => {
+    const line = typeof args[0] === 'string' ? args[0] : ''
+    const match = /^\[([\w-]+)\] (?:.*\b)?(?:scheduled|subscribed)\b/.exec(line)
+    if (match) {
+      registered.push(match[1])
+      return
+    }
+    bootLog(...args)
+  }
+
+  try {
     if (process.env.ENABLE_CRON !== 'false') {
     startReminderCron();
     // Module 2 snooze re-delivery. Separate schedule (5-minutely vs hourly)
@@ -104,6 +179,9 @@ app.listen(PORT, () => {
     startCalendarCron();
     // Module 5: Teams delivery retries + daily/weekly digests.
     startTeamsCron();
+    // Module 8: Bugs Finder SLA sweep — flags at-risk and breached defects
+    // against the server clock every 5 minutes.
+    startBugSlaCron();
   }
 
   // Module 5 fan-out subscribes to the notification engine's EventEmitter, so
@@ -112,9 +190,19 @@ app.listen(PORT, () => {
   // this is part of the request-time notification path — an instance with
   // crons disabled must still post events to configured channels.
   startTeamsFanout();
-  console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`)
-  console.log(`🔗 Health check: http://localhost:${PORT}/health\n`)
-  
+  } finally {
+    // Restored in `finally` so a throwing cron registration cannot leave the
+    // process with a patched console.log for the rest of its life.
+    console.log = bootLog
+  }
+
+  const unique = [...new Set(registered)]
+  console.log(
+    `   - Jobs:     ${unique.length ? `${unique.length} active` : 'disabled'}` +
+    (unique.length ? paint(2, ` (${unique.join(', ')})`) : '')
+  )
+  console.log(paint(32, '   ✓ Ready') + paint(2, ` in ${Date.now() - bootStartedAt}ms`))
+  console.log('')
 })
 
 module.exports = app

@@ -40,7 +40,10 @@ pool.connect((err, client, release) => {
       console.error(err.stack)
     }
   } else {
-    console.log('✅ Database connected successfully')
+    // Matches the startup banner's `✓ ...` style in server.js. This connect is
+    // async, so the line lands wherever it lands relative to the banner —
+    // keeping the shape consistent means it reads as part of the same boot.
+    console.log('   ✓ Database connected')
     release()
   }
 })
