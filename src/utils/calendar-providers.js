@@ -617,13 +617,37 @@ const PROVIDER_NAMES = Object.freeze(['google', 'outlook'])
 /**
  * The real adapter when credentials exist, else the mock.
  *
+ * PRODUCTION NEVER FALLS BACK TO THE MOCK.
+ * In development the mock is a feature: it lets the whole sync engine be used
+ * and tested without credentials. In production it would be a trap — a
+ * mistyped or missing GOOGLE_CLIENT_ID would silently attach users to a fake
+ * in-memory calendar that looks connected, reports successful syncs, and
+ * writes to nothing. They would believe their deadlines were on their real
+ * calendar when they were not.
+ *
+ * So under NODE_ENV=production a missing credential is a hard, loud failure
+ * rather than a quiet downgrade. The caller surfaces this to the user as
+ * "not configured" instead of offering a Connect button that lies.
+ *
  * @param {'google'|'outlook'} name
- * @returns {object|null} null for an unknown provider name.
+ * @returns {object|null} null for an unknown provider, or for an
+ *                        unconfigured provider in production.
  */
 function resolveProvider(name) {
   const real = realProviders[name]
   if (!real) return null
   if (real.isConfigured()) return real
+
+  if (process.env.NODE_ENV === 'production') {
+    console.error(
+      `[calendar] ${name} is NOT configured in production. Set ` +
+      `${name === 'google' ? 'GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET' : 'MS_CLIENT_ID/MS_CLIENT_SECRET'}. ` +
+      `Refusing to fall back to the demo calendar — users must never be told ` +
+      `they are connected to a calendar that does not exist.`
+    )
+    return null
+  }
+
   return mockProviders[name]
 }
 

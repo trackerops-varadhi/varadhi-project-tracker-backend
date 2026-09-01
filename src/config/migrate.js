@@ -529,6 +529,14 @@ await client.query(`
       CREATE INDEX IF NOT EXISTS idx_leave_requests_status ON leave_requests (status)
     `)
 
+    // ─── Module 8: Bugs Finder ────────────────────────────────────────────
+    // Mirrored from migrate-bugs.js for the same reason as Modules 2/4/5
+    // above: that file remains the one to run against an existing DB, but a
+    // from-scratch database must end up with the identical schema. The
+    // statement list is imported rather than copied so the two cannot drift.
+    const { runBugMigration } = require('./migrate-bugs')
+    await runBugMigration(client)
+
     await client.query('COMMIT')
     console.log('✅ All tables created successfully!')
     process.exit(0)

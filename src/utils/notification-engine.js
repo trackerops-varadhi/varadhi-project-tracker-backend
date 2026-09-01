@@ -178,6 +178,20 @@ const NOTIFICATION_TYPES = {
   LEAVE_REQUESTED: 'leave_requested',
   LEAVE_STATUS_CHANGED: 'leave_status_changed',
   TIME_LOGGED: 'time_logged',
+
+  // Bugs Finder (Module 8). Defect-workflow events. BUG_SLA_BREACHED and
+  // BUG_SLA_AT_RISK are deliberately left out of TYPE_CATEGORY_MAP below for
+  // the same reason TASK_ESCALATION is: a missed SLA is a commitment the team
+  // has broken, and a soft per-category preference must not be able to hide it.
+  BUG_ASSIGNED: 'bug_assigned',
+  BUG_REASSIGNED: 'bug_reassigned',
+  BUG_STATUS_CHANGED: 'bug_status_changed',
+  BUG_COMMENT: 'bug_comment',
+  BUG_REOPENED: 'bug_reopened',
+  BUG_CLOSED: 'bug_closed',
+  BUG_SLA_AT_RISK: 'bug_sla_at_risk',
+  BUG_SLA_BREACHED: 'bug_sla_breached',
+  BUG_CRITICAL_REPORTED: 'bug_critical_reported',
 };
 
 // Maps a notification type to the opt-out category checkbox it belongs to
@@ -223,6 +237,17 @@ const TYPE_CATEGORY_MAP = {
   [NOTIFICATION_TYPES.LEAVE_REQUESTED]: 'system_notifications',
   [NOTIFICATION_TYPES.LEAVE_STATUS_CHANGED]: 'system_notifications',
   [NOTIFICATION_TYPES.TIME_LOGGED]: 'system_notifications',
+  // Bugs Finder. No dedicated bug_* preference columns exist on
+  // notification_preferences, so each bug event rides the existing task
+  // category with the closest meaning rather than silently ignoring the
+  // user's settings. The two SLA types are intentionally absent — see the
+  // note beside their definitions above.
+  [NOTIFICATION_TYPES.BUG_ASSIGNED]: 'task_assigned',
+  [NOTIFICATION_TYPES.BUG_REASSIGNED]: 'task_reassigned',
+  [NOTIFICATION_TYPES.BUG_STATUS_CHANGED]: 'task_status_changed',
+  [NOTIFICATION_TYPES.BUG_COMMENT]: 'comment_added',
+  [NOTIFICATION_TYPES.BUG_REOPENED]: 'task_status_changed',
+  [NOTIFICATION_TYPES.BUG_CLOSED]: 'task_status_changed',
 };
 
 // Event types worth an email, per the spec — everything else stays in-app
@@ -239,6 +264,10 @@ const EMAIL_WORTHY_TYPES = new Set([
   NOTIFICATION_TYPES.TASK_OVERDUE,
   NOTIFICATION_TYPES.PROJECT_ASSIGNED,
   NOTIFICATION_TYPES.USER_INVITED,
+  // A bug landing on a developer's plate, and a missed SLA, are both worth an
+  // email — they are the two bug events someone is accountable for acting on.
+  NOTIFICATION_TYPES.BUG_ASSIGNED,
+  NOTIFICATION_TYPES.BUG_SLA_BREACHED,
 ]);
 
 // Event types worth a push, per the spec. Same story — push is already a
@@ -252,6 +281,12 @@ const PUSH_WORTHY_TYPES = new Set([
   NOTIFICATION_TYPES.TASK_OVERDUE,
   NOTIFICATION_TYPES.TASK_APPROVED,
   NOTIFICATION_TYPES.TASK_REJECTED,
+  // Same reasoning as the email set, plus the critical-defect alert: these are
+  // the bug events worth interrupting somebody for.
+  NOTIFICATION_TYPES.BUG_ASSIGNED,
+  NOTIFICATION_TYPES.BUG_SLA_AT_RISK,
+  NOTIFICATION_TYPES.BUG_SLA_BREACHED,
+  NOTIFICATION_TYPES.BUG_CRITICAL_REPORTED,
 ]);
 
 const APP_URL = process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000';

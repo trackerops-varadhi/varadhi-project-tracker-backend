@@ -14,6 +14,8 @@
     "db:migrate:push-retry": "node src/config/migrate-push-retry.js",
     "test:push-retry": "node scripts/push-retry.test.js",
     "db:migrate:module45": "node src/config/migrate-module45.js",
+    "db:migrate:bugs": "node src/config/migrate-bugs.js",
+    "test:bugs": "node scripts/bugs.test.js",
     "test:crypto": "node scripts/crypto.test.js",
     "test:calendar": "node scripts/calendar-sync.test.js",
     "test:teams": "node scripts/teams-webhook.test.js"

@@ -89,13 +89,19 @@ async function requireOwnedConnection(req, res) {
 // ---------------------------------------------------------------------------
 exports.getProviders = async (req, res) => {
   try {
+    // Production never falls back to the demo calendar (see
+    // calendar-providers.js#resolveProvider), so `mock` must report that
+    // honestly — otherwise the UI would offer a demo that cannot run.
+    const isProduction = process.env.NODE_ENV === 'production'
+
     const providers = PROVIDER_NAMES.map((name) => ({
       name,
       label: name === 'google' ? 'Google Calendar' : 'Outlook Calendar',
-      // The UI shows a "demo mode" hint rather than a Connect button that
-      // would silently attach a fake calendar without the user realising.
       configured: isConfigured(name),
-      mock: !isConfigured(name),
+      // Demo is only available off-production AND without real credentials.
+      mock: !isConfigured(name) && !isProduction,
+      // Unconfigured in production = genuinely unavailable, not a demo.
+      unavailable: !isConfigured(name) && isProduction,
     }))
     return successResponse(res, {
       providers,
@@ -152,7 +158,19 @@ exports.getAuthUrl = async (req, res) => {
     }
 
     const provider = resolveProvider(name)
-    if (!provider) return errorResponse(res, 'Unknown calendar provider.', 400)
+    // In production resolveProvider returns null for an uncredentialled
+    // provider rather than silently handing back the demo calendar, so this
+    // needs to say what is actually wrong instead of "unknown provider".
+    if (!provider) {
+      if (!isConfigured(name)) {
+        return errorResponse(
+          res,
+          `${name === 'google' ? 'Google' : 'Outlook'} Calendar is not configured on this server yet. Contact your administrator.`,
+          503
+        )
+      }
+      return errorResponse(res, 'Unknown calendar provider.', 400)
+    }
 
     const state = buildStateToken({ userId: req.user.id, provider: name })
     if (!state) return errorResponse(res, 'Unable to start the authorisation flow.', 500)

@@ -200,13 +200,17 @@ async function main() {
     // authorised payload. Assert the engine's gates are still the only place
     // those decisions happen.
     check('engine still exports 14 symbols', Object.keys(engine).length === 14, String(Object.keys(engine).length))
-    check('PUSH_WORTHY_TYPES still 7', engine.PUSH_WORTHY_TYPES.size === 7, String(engine.PUSH_WORTHY_TYPES.size))
+    // 7 through Module 5; +4 from Module 8's Bugs Finder (bug_assigned,
+    // bug_sla_at_risk, bug_sla_breached, bug_critical_reported) — the bug
+    // events worth interrupting somebody for.
+    check('PUSH_WORTHY_TYPES still 11', engine.PUSH_WORTHY_TYPES.size === 11, String(engine.PUSH_WORTHY_TYPES.size))
     // 33 at Module 2; +3 integration-health types added by Modules 4 & 5
-    // (calendar_sync_failed, calendar_conflict_detected, teams_webhook_disabled).
+    // (calendar_sync_failed, calendar_conflict_detected, teams_webhook_disabled);
+    // +3 leave/time types; +9 Bugs Finder types added by Module 8.
     // The count is asserted rather than a floor because the point is to notice
     // that types changed at all — a new type needs a frontend icon entry and a
     // deliberate decision about TYPE_CATEGORY_MAP, and this is the tripwire.
-    check('36 notification types', Object.keys(engine.NOTIFICATION_TYPES).length === 36,
+    check('48 notification types', Object.keys(engine.NOTIFICATION_TYPES).length === 48,
       String(Object.keys(engine.NOTIFICATION_TYPES).length))
     // The three new types must stay OUT of the category map: each one means an
     // integration the user connected has stopped working, and a per-category
@@ -215,6 +219,12 @@ async function main() {
       [engine.NOTIFICATION_TYPES.CALENDAR_SYNC_FAILED,
        engine.NOTIFICATION_TYPES.CALENDAR_CONFLICT_DETECTED,
        engine.NOTIFICATION_TYPES.TEAMS_WEBHOOK_DISABLED]
+        .every((t) => engine.TYPE_CATEGORY_MAP[t] === undefined))
+    // Same rule for the SLA types (Module 8): a missed or nearly-missed
+    // resolution commitment is a failure the team must see, not a preference.
+    check('bug SLA types are not silenceable by category',
+      [engine.NOTIFICATION_TYPES.BUG_SLA_AT_RISK,
+       engine.NOTIFICATION_TYPES.BUG_SLA_BREACHED]
         .every((t) => engine.TYPE_CATEGORY_MAP[t] === undefined))
     check('urgent still bypasses quiet hours (TASK_ESCALATION uncategorised)',
       engine.TYPE_CATEGORY_MAP[engine.NOTIFICATION_TYPES.TASK_ESCALATION] === undefined)

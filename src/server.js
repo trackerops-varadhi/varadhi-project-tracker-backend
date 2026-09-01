@@ -9,7 +9,7 @@ const { startPushRetryCron } = require('./utils/push-retry');
 const { startCalendarCron } = require('./utils/calendar-cron');
 const { startTeamsCron } = require('./utils/teams-cron');
 const { startTeamsFanout } = require('./utils/teams-fanout');
-// const { startBugSlaCron } = require('./utils/bug-sla-cron');
+const { startBugSlaCron } = require('./utils/bug-sla-cron');
 const notificationRoutes = require('./routes/notifications.routes');
 // const path = require('path')
 
@@ -121,7 +121,7 @@ app.use('/api/teams',         require('./routes/teams.routes'))
 app.use('/api/leave-management', require('./routes/leave-management.routes'))
 app.use('/api/time-management', require('./routes/time-management.routes'))
 // Module 8: Bugs Finder
-// app.use('/api/bugs',          require('./routes/bugs.routes'))
+app.use('/api/bugs',          require('./routes/bugs.routes'))
 
 // ─── Error Handlers ────────────────────────────────────────────────────────────
 const { errorHandler, notFound } = require('./middleware/error.middleware')
@@ -181,7 +181,7 @@ app.listen(PORT, () => {
     startTeamsCron();
     // Module 8: Bugs Finder SLA sweep — flags at-risk and breached defects
     // against the server clock every 5 minutes.
-    // startBugSlaCron();
+    startBugSlaCron();
   }
 
   // Module 5 fan-out subscribes to the notification engine's EventEmitter, so
