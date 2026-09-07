@@ -18,7 +18,7 @@ services:
       # origin (server.js) and the base for deep links in push/email payloads
       # (notification-engine.js APP_URL).
       - key: FRONTEND_URL
-        value: https://varadhi-project-tracker-frontend.onrender.com
+        value: https://varadhi-project-tracker.vercel.app
       # Web push. Without BOTH keys the push channel degrades to a silent
       # no-op, so a deploy that omits them ships with push quietly disabled.
       # Generate once with `npx web-push generate-vapid-keys`, then paste the

@@ -53,11 +53,7 @@ app.use(helmet())
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:3000',
   'http://127.0.0.1:3000',
-  // Both deployment targets are listed: CLAUDE.md documents Vercel while the
-  // service has also been served from Render. Keeping both avoids a silent
-  // CORS failure whenever FRONTEND_URL and the live origin disagree.
-  'https://varadhi-tracker.vercel.app',
-  'https://varadhi-project-tracker-frontend.onrender.com',
+  'https://varadhi-project-tracker.vercel.app',
 ].filter(Boolean)
 
 // `X-Requested-With` MUST be listed here or the CSRF guard becomes an outage:
