@@ -537,6 +537,16 @@ await client.query(`
     const { runBugMigration } = require('./migrate-bugs')
     await runBugMigration(client)
 
+    // ─── Session management ───────────────────────────────────────────────
+    // Mirrored for the same reason as the modules above. Order matters: the
+    // session migration backfills a user_sessions row for every session_id
+    // already in user_tokens, so user_tokens must exist first. On a
+    // from-scratch database that backfill simply selects nothing.
+    const { runUserTokensMigration } = require('./migrate-user-tokens')
+    await runUserTokensMigration(client)
+    const { runSessionMigration } = require('./migrate-sessions')
+    await runSessionMigration(client)
+
     await client.query('COMMIT')
     console.log('✅ All tables created successfully!')
     process.exit(0)

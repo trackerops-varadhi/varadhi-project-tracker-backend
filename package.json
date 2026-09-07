@@ -18,7 +18,11 @@
     "test:bugs": "node scripts/bugs.test.js",
     "test:crypto": "node scripts/crypto.test.js",
     "test:calendar": "node scripts/calendar-sync.test.js",
-    "test:teams": "node scripts/teams-webhook.test.js"
+    "test:teams": "node scripts/teams-webhook.test.js",
+    "db:migrate:sessions": "node src/config/migrate-sessions.js",
+    "test:sessions": "node scripts/sessions.test.js",
+    "test:migration": "node scripts/migration-compat.test.js",
+    "test:security": "node scripts/security-audit.test.js"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -27,6 +31,7 @@
     "@supabase/supabase-js": "^2.109.0",
     "axios": "^1.19.0",
     "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
