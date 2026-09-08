@@ -76,10 +76,35 @@ const LEGACY_REFRESH_COOKIE_PATHS = ['/api/auth']
 const ACCESS_TOKEN_MS = 15 * 60 * 1000
 const REFRESH_TOKEN_MS = 7 * 24 * 60 * 60 * 1000
 
+/*
+ * SameSite is env-tunable, and the default stays 'none' ON PURPOSE.
+ *
+ * With the Vercel same-origin proxy in place (next.config.mjs) the cookies are
+ * first-party, so 'lax' becomes both correct and stronger — it would restore
+ * genuine SameSite CSRF protection instead of relying on the X-Requested-With
+ * guard alone.
+ *
+ * But 'none' also works perfectly in a first-party context, and it is the only
+ * value that keeps a client still calling the backend DIRECTLY working. During
+ * rollout that matters: browsers holding a cached JS bundle with the old
+ * absolute API URL, and any client that has not picked up the new deploy, would
+ * be signed out instantly by 'lax'.
+ *
+ * So: ship the proxy on 'none', confirm every browser can log in, THEN set
+ * COOKIE_SAMESITE=lax in the Render dashboard to tighten. Two safe steps rather
+ * than one risky one, and no redeploy needed for the second.
+ */
+const SAMESITE = (process.env.COOKIE_SAMESITE || '').toLowerCase()
+const VALID_SAMESITE = ['lax', 'none', 'strict']
+
 const baseOptions = {
   httpOnly: true,
   secure: isProd,
-  sameSite: isProd ? 'none' : 'lax',
+  sameSite: VALID_SAMESITE.includes(SAMESITE)
+    ? SAMESITE
+    : isProd
+      ? 'none'
+      : 'lax',
 }
 
 /*

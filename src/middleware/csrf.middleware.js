@@ -65,7 +65,13 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
  * Matched by prefix so sub-paths are covered; anchored with a leading slash so
  * a route like /api/notification-actions-admin would NOT accidentally match.
  */
-const EXEMPT_PREFIXES = ['/api/notification-actions']
+const EXEMPT_PREFIXES = [
+  '/api/notification-actions',
+  // Diagnostics are GET-only and carry no ambient authority; the prefix is
+  // listed so a browser opening them directly is never blocked while someone is
+  // trying to debug a login failure.
+  '/api/diag',
+]
 
 const isExempt = (path) =>
   EXEMPT_PREFIXES.some(

@@ -177,6 +177,9 @@ app.get('/health', (req, res) => {
 
 // â”€â”€â”€ API Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use('/api/auth',          require('./routes/auth.routes'))
+// Cookie transport diagnostics. 404s unless ENABLE_DIAGNOSTICS=true; remove the
+// env var once production login is confirmed working.
+app.use('/api/diag',          require('./routes/diagnostics.routes'))
 app.use('/api/users',         require('./routes/users.routes'))
 app.use('/api/projects',      require('./routes/projects.routes'))
 app.use('/api/tasks',         require('./routes/tasks.routes'))

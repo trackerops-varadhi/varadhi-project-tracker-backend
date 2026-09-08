@@ -2,6 +2,23 @@ const router = require('express').Router()
 const ctrl = require('../controllers/auth.controller')
 const { protect } = require('../middleware/auth.middleware')
 const { createRateLimiter } = require('../middleware/rate-limit.middleware')
+const { extractIpAddress } = require('../utils/device-parser')
+
+/*
+ * Rate-limit key: the ORIGINAL client, read from the left of X-Forwarded-For.
+ *
+ * `req.ip` is wrong here now. Traffic reaches this service as
+ * browser -> Vercel (same-origin proxy) -> Render -> Express, so req.ip
+ * resolves to a Vercel edge address that is identical for every user on the
+ * planet. Keying on it would put the entire company in one bucket, and the
+ * first person to mistype a password would lock everyone out.
+ *
+ * The leftmost forwarded entry is client-controlled and therefore spoofable.
+ * That is an accepted trade-off for a throttle: the alternative is a limiter
+ * that reliably locks out real users, which is strictly worse. Nothing is
+ * authorised on the basis of this value.
+ */
+const clientKey = (prefix) => (req) => `${prefix}:${extractIpAddress(req) || 'unknown'}`
 
 /*
  * Brute-force protection on the credential endpoints.
@@ -39,7 +56,7 @@ const { createRateLimiter } = require('../middleware/rate-limit.middleware')
 const loginLimiter = createRateLimiter({
   windowMs: Number(process.env.LOGIN_RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
   max: Number(process.env.LOGIN_RATE_LIMIT_MAX) || 20,
-  keyFn: (req) => `login:${req.ip}`,
+  keyFn: clientKey('login'),
   message: 'Too many login attempts. Please wait a few minutes and try again.',
 })
 
@@ -49,7 +66,7 @@ const loginLimiter = createRateLimiter({
 const recoveryLimiter = createRateLimiter({
   windowMs: Number(process.env.RECOVERY_RATE_LIMIT_WINDOW_MS) || 60 * 60 * 1000,
   max: Number(process.env.RECOVERY_RATE_LIMIT_MAX) || 10,
-  keyFn: (req) => `recovery:${req.ip}`,
+  keyFn: clientKey('recovery'),
   message: 'Too many attempts. Please wait a while and try again.',
 })
 
