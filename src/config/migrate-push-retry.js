@@ -1,3 +1,20 @@
+/*
+ * HISTORICAL — one-time upgrade for an EXISTING pre-split database.
+ *
+ * This ran once against dev and production when the failed-push retry queue shipped. It is kept for
+ * the record and because migrate.js mirrors its statements, not because it should be run again.
+ *
+ * It creates tables unqualified on the default pool and declares foreign keys
+ * that cross module boundaries — 1 of them. After the Phase 2 schema split
+ * both of those are wrong: the tables live in module schemas now, and those
+ * constraints were deliberately dropped because a foreign key cannot span two
+ * services. Re-running it against a split database would create empty shadow
+ * tables in public while reporting success, so assertNotSplit refuses that.
+ *
+ * NEEDS A SCHEMA CHANGE IN THIS AREA? Add it through the owning module's pool
+ * (`require('../platform/db').forSchema('notify')`) the way
+ * migrate-user-tokens.js and migrate-sessions.js do — not by editing this file.
+ */
 /**
  * Additive migration: failed-push retry queue (AC-10, second half).
  *
@@ -9,6 +26,7 @@
  */
 require('dotenv').config()
 const pool = require('./db')
+const { assertNotSplit } = require('./split-guard')
 
 const STATEMENTS = [
   // One row per (notification, subscription) delivery attempt that failed
@@ -62,7 +80,10 @@ async function run() {
   }
 }
 
-run().catch((err) => {
+// Refuses on a split database — see split-guard.js.
+assertNotSplit(pool, 'migrate-push-retry.js')
+  .then(() => run())
+  .catch((err) => {
   console.error('push-retry migration failed:', err.message)
   process.exit(1)
 })

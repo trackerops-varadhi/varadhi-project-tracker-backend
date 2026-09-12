@@ -228,6 +228,37 @@ exports.applyTaskStatusTransition = async ({ taskId, fromStatus, toStatus }) => 
   return { applied: true, status: swapped.status, currentStatus: swapped.status }
 }
 
+/* ── Reminder sweeps ────────────────────────────────────────────────────── */
+//
+// notify owns the reminder cron and the decision of who to tell; work owns the
+// question "which tasks are due when?". Splitting it there is what let the
+// sweeps move out of utils/ without any of them reaching across a schema.
+//
+// Each returns rows shaped { id, title, due_date, assignee_id, project_name,
+// manager_id } — project_name and manager_id come from work's own projects
+// table, so no caller needs to join for them.
+
+/**
+ * Tasks due exactly `offsetDays` calendar days from today, in `timezone`.
+ * 0 = today, 1 = tomorrow. notify passes each configured lead time here for
+ * the custom-lead-days sweep rather than joining its preferences to tasks.
+ */
+exports.findTasksDueInDays = async (offsetDays, timezone) =>
+  repo.findTasksDueInDays(offsetDays, timezone)
+
+/** Tasks past due and not finished. */
+exports.findOverdueTasks = async () => repo.findOverdueTasks()
+
+/**
+ * Tasks more than `hours` past due.
+ *
+ * `requireManager` selects which escalation is being run: true for the 48h
+ * manager escalation (a project with no manager has nobody to tell), false for
+ * the 72h admin escalation (which must still report managerless projects).
+ */
+exports.findTasksOverdueByHours = async (hours, opts) =>
+  repo.findTasksOverdueByHours(hours, opts)
+
 /** Upcoming unfinished tasks for a user, for the calendar preview. */
 exports.getUpcomingTasksForUser = async (userId, days, limit) =>
   repo.findUpcomingTasksForUser(userId, days, limit)

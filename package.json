@@ -23,7 +23,8 @@
     "test:sessions": "node scripts/sessions.test.js",
     "test:migration": "node scripts/migration-compat.test.js",
     "test:security": "node scripts/security-audit.test.js",
-    "lint:boundaries": "node scripts/check-boundaries.js"
+    "lint:boundaries": "node scripts/check-boundaries.js",
+    "test:ops": "node scripts/ops.test.js"
   },
   "engines": {
     "node": ">=18.0.0"

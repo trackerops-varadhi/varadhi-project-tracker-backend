@@ -49,11 +49,17 @@
  * whatever the server holds.
  *
  * The default pool is deliberately the smaller of the two budgets. At runtime it
- * serves exactly two callers — the `/health` `SELECT 1` and the not-yet-migrated
- * `utils/reminder-cron.js` sweep, which issues its queries sequentially. Its
- * other users are migrations and `src/scripts/*`, which run in their own
- * short-lived processes and are sequential too. Nothing here needs pg's default
- * of 10.
+ * serves only the health and readiness probes and the boot-migration gate —
+ * `SELECT 1`, one catalogue query, and nothing else. The reminder sweep used to
+ * be its other consumer; that moved into modules/notify/reminder-cron.js and
+ * now runs on notify's and work's own pools. Its remaining users are migrations
+ * and `src/scripts/*`, which run in their own short-lived processes and are
+ * sequential. Nothing here needs pg's default of 10.
+ *
+ * Readiness probes every module pool, which forces all seven open rather than
+ * letting them stay lazy — that is accounted for in the ceiling above, and
+ * platform/readiness.js explains why a probe that skips the pools cannot
+ * honestly report them ready.
  */
 
 const { Pool, types } = require('pg')

@@ -1,7 +1,23 @@
 require('dotenv').config()
 const pool = require('./db')
 
+const { assertNotSplit } = require('./split-guard')
+
+/*
+ * THIS SCRIPT PROVISIONS THE PRE-SPLIT LAYOUT, and that is not a bug.
+ *
+ * Everything below creates tables unqualified, in `public`, with the full set
+ * of foreign keys including the 31 that cross module boundaries. That is the
+ * correct starting state: migrate-schema-split.js is what moves those tables
+ * into module schemas and drops exactly those 31 constraints. A fresh database
+ * runs this, then that, in order.
+ *
+ * What must never happen is running this AFTER the split, which would create a
+ * shadow copy of every table in public while reporting success. assertNotSplit
+ * refuses that case — see split-guard.js for why it is silent otherwise.
+ */
 const createTables = async () => {
+  await assertNotSplit(pool, 'migrate.js')
   const client = await pool.connect()
   try {
     await client.query('BEGIN')

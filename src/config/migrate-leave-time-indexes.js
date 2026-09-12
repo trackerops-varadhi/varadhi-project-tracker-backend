@@ -9,7 +9,13 @@
 // Safe to run repeatedly: every statement is IF NOT EXISTS, and the whole
 // thing is wrapped in a transaction like migrate.js.
 require('dotenv').config()
-const pool = require('./db')
+// The workforce pool. This script touches only leave_requests and time_logs,
+// both workforce-owned, and declares no cross-module foreign key — so unlike
+// the historical migrations in this directory it stays valid after the Phase 2
+// split and simply needs to look in the right schema. Correct before the split
+// too: Postgres ignores a search_path entry that does not exist, so on an
+// unsplit database the path collapses to public.
+const pool = require('../platform/db').forSchema('workforce')
 
 async function run() {
   const client = await pool.connect()

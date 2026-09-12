@@ -645,3 +645,105 @@ exports.taskExists = async (id) => {
   const { rows } = await pool.query('SELECT id FROM tasks WHERE id = $1', [id])
   return Boolean(rows[0])
 }
+
+/* ── Reminder sweeps ──────────────────────────────────────────────────────
+ *
+ * These back notify's reminder cron. The sweeps used to live in
+ * utils/reminder-cron.js and query `tasks JOIN projects` — and, for two of
+ * them, `notification_preferences` and `users` as well — on one pool. After the
+ * Phase 2 split only the first half of that is work's to answer, so the joins
+ * that crossed a boundary moved out to the caller and what remains is here.
+ *
+ * `completed` and `done` are both terminal. The original swept both because
+ * the status vocabulary drifted historically; dropping either would start
+ * re-reminding people about finished work.
+ *
+ * Every date comparison happens in Postgres under an explicit timezone. "Due
+ * tomorrow" is a calendar question, and answering it in JS against a server
+ * running UTC shifts the boundary by the offset — the same bug the DATE type
+ * parser in platform/db.js exists to avoid.
+ */
+
+const TERMINAL_STATUSES = ['completed', 'done']
+
+/**
+ * Tasks whose due date falls exactly `offsetDays` calendar days from today in
+ * `timezone`. 0 is today, 1 is tomorrow, 5 is five days out.
+ *
+ * Used for the due-today and due-tomorrow sweeps, and — with the offset driven
+ * by each user's configured lead time — for the custom lead-time sweep, which
+ * is why the offset is a parameter rather than three near-identical queries.
+ */
+exports.findTasksDueInDays = async (offsetDays, timezone) => {
+  const { rows } = await pool.query(
+    `SELECT t.id,
+            t.title,
+            t.due_date,
+            t.assignee_id,
+            p.name       AS project_name,
+            p.manager_id AS manager_id
+       FROM tasks t
+       LEFT JOIN projects p ON p.id = t.project_id
+      WHERE t.assignee_id IS NOT NULL
+        AND t.due_date IS NOT NULL
+        AND t.status <> ALL($3)
+        AND (t.due_date AT TIME ZONE $1)::date
+            = ((NOW() AT TIME ZONE $1)::date + ($2 || ' days')::interval)::date`,
+    [timezone, String(offsetDays), TERMINAL_STATUSES]
+  )
+  return rows
+}
+
+/** Tasks past their due date and not terminal. */
+exports.findOverdueTasks = async () => {
+  const { rows } = await pool.query(
+    `SELECT t.id,
+            t.title,
+            t.due_date,
+            t.assignee_id,
+            p.name       AS project_name,
+            p.manager_id AS manager_id
+       FROM tasks t
+       LEFT JOIN projects p ON p.id = t.project_id
+      WHERE t.assignee_id IS NOT NULL
+        AND t.due_date IS NOT NULL
+        AND t.due_date < NOW()
+        AND t.status <> ALL($1)`,
+    [TERMINAL_STATUSES]
+  )
+  return rows
+}
+
+/**
+ * Tasks more than `hours` past due, on a project that has a manager.
+ *
+ * The original also joined `users` for the assignee's display name. That join
+ * crossed into identity, so it is gone — the caller resolves names through
+ * identity.getUserCards(), the same batched lookup every other display
+ * reference in the codebase now uses.
+ */
+exports.findTasksOverdueByHours = async (hours, { requireManager = false } = {}) => {
+  // requireManager distinguishes the two escalations. The 48h sweep notifies
+  // the project manager, so a project without one has nobody to escalate to and
+  // an INNER JOIN is correct. The 72h sweep notifies every admin instead, so a
+  // managerless project must still be reported — hence the LEFT JOIN. Collapsing
+  // these into one query would silently drop managerless projects from the final
+  // escalation, which is the one that exists precisely because nothing else
+  // worked.
+  const { rows } = await pool.query(
+    `SELECT t.id,
+            t.title,
+            t.due_date,
+            t.assignee_id,
+            p.name       AS project_name,
+            p.manager_id AS manager_id
+       FROM tasks t
+       ${requireManager ? 'JOIN' : 'LEFT JOIN'} projects p ON p.id = t.project_id
+      WHERE t.due_date IS NOT NULL
+        AND t.due_date < NOW() - ($1 || ' hours')::interval
+        AND t.status <> ALL($2)
+        ${requireManager ? 'AND p.manager_id IS NOT NULL' : ''}`,
+    [String(hours), TERMINAL_STATUSES]
+  )
+  return rows
+}

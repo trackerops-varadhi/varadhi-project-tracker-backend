@@ -15,6 +15,7 @@ const engine = require('./engine')
 const snoozeCron = require('./snooze-cron')
 const pushRetry = require('./push-retry')
 const claimReconciler = require('./claim-reconciler')
+const reminderCron = require('./reminder-cron')
 
 exports.mount = [
   { path: '/api/notifications', router: require('./notifications.routes') },
@@ -32,6 +33,11 @@ exports.mount = [
 exports.jobs = [
   { name: 'snooze', start: snoozeCron.startSnoozeCron, stop: snoozeCron.stopSnoozeCron },
   { name: 'push-retry', start: pushRetry.startPushRetryCron },
+  // Moved out of utils/ and into this module: all six of its sweeps end in
+  // dispatchNotification, and the custom-lead-time sweep reads
+  // notification_preferences, which notify owns. server.js no longer starts it
+  // directly — it travels with the module now, like every other job here.
+  { name: 'reminder', start: reminderCron.startReminderCron, stop: reminderCron.stopReminderCron },
 ]
 
 /* ══════════════════════════════════════════════════════════════════════════ */
@@ -114,6 +120,17 @@ exports.notificationEvents = engine.notificationEvents
 exports.runPushRetriesNow = pushRetry.runPushRetriesNow
 exports.enqueueRetry = pushRetry.enqueueRetry
 exports.runSnoozesNow = snoozeCron.runSnoozesNow
+// Drives all six reminder sweeps once, without waiting for the hourly tick.
+exports.runRemindersNow = reminderCron.runRemindersNow
+// Individual sweeps, for tests that need to assert one in isolation.
+exports.reminderSweeps = {
+  dueTomorrow: reminderCron.sendDueTomorrowReminders,
+  dueToday: reminderCron.sendDueTodayReminders,
+  customLeadTime: reminderCron.sendCustomLeadTimeReminders,
+  overdue: reminderCron.sendOverdueAlerts,
+  escalateToManager: reminderCron.escalateStaleTasks,
+  escalateToAdmin: reminderCron.escalateToAdmin,
+}
 
 /**
  * Complete any notification claims left pending by a failed second phase of a

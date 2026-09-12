@@ -9,7 +9,6 @@ const db = require('./config/db')
 const { requireCsrfHeader } = require('./middleware/csrf.middleware')
 const userTokensMigrationPath = require.resolve('./config/migrate-user-tokens')
 const sessionsMigrationPath = require.resolve('./config/migrate-sessions')
-const { startReminderCron } = require('./utils/reminder-cron');
 // const path = require('path')
 
 const app = express()
@@ -158,6 +157,9 @@ const runBootMigrations = async () => {
 // app.use('/uploads', express.static(path.join(__dirname, '../uploads')))
 
 // â”€â”€â”€ Health check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// LIVENESS. Answers "is this process up?" and deliberately touches nothing —
+// a restart is the remedy for a failure here, so it must not fail for a reason
+// a restart cannot fix (a database outage restarts every instance in a loop).
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -166,6 +168,11 @@ app.get('/health', (req, res) => {
     environment: process.env.NODE_ENV
   })
 })
+
+// READINESS. Answers "should this instance receive traffic?" — database round
+// trip, module schemas present, every module pool serving on its own
+// search_path. 200 ready / 503 not ready. See platform/readiness.js.
+app.get('/health/ready', require('./platform/readiness').handler)
 
 // â”€â”€â”€ API Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Cookie transport diagnostics. 404s unless ENABLE_DIAGNOSTICS=true; remove the
@@ -239,7 +246,6 @@ app.listen(PORT, () => {
 
   try {
     if (process.env.ENABLE_CRON !== 'false') {
-    startReminderCron();
     // Module 8: Bugs Finder SLA sweep â€” flags at-risk and breached defects
     // against the server clock every 5 minutes.
     // Jobs owned by a migrated module. The module says what its jobs are; the
