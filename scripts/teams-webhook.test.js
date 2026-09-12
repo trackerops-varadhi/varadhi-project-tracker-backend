@@ -10,7 +10,11 @@
  */
 require('dotenv').config()
 
-const pool = require('../src/config/db')
+// One pool per module, because the tables this suite touches are owned by
+// different modules and the Phase 2 schema split put each in its own schema.
+// Each query below goes to the pool of the module that owns its table; the
+// old single `pool` (src/config/db) can no longer see any of them.
+const { identity, integrations, notify, work } = require('./test-pools')
 const cards = require('../src/modules/integrations/teams-cards')
 const delivery = require('../src/modules/integrations/teams-delivery')
 const fanout = require('../src/modules/integrations/teams-fanout')
@@ -35,9 +39,9 @@ let projectId = null
 let webhookId = null
 
 const cleanup = async () => {
-  await pool.query(`DELETE FROM teams_webhooks WHERE name LIKE '${MARKER}%'`).catch(() => {})
-  await pool.query(`DELETE FROM projects WHERE name LIKE '${MARKER}%'`).catch(() => {})
-  await pool.query(`DELETE FROM notifications WHERE title LIKE '${MARKER}%'`).catch(() => {})
+  await integrations.query(`DELETE FROM teams_webhooks WHERE name LIKE '${MARKER}%'`).catch(() => {})
+  await work.query(`DELETE FROM projects WHERE name LIKE '${MARKER}%'`).catch(() => {})
+  await notify.query(`DELETE FROM notifications WHERE title LIKE '${MARKER}%'`).catch(() => {})
 }
 
 async function main() {
@@ -137,7 +141,7 @@ async function main() {
   }
 
   // ── Database-backed ─────────────────────────────────────────────────────
-  const u = (await pool.query(`SELECT id FROM users WHERE status='active' LIMIT 1`)).rows[0]
+  const u = (await identity.query(`SELECT id FROM users WHERE status='active' LIMIT 1`)).rows[0]
   if (!u) {
     console.log('\nSKIP — no active user; database-backed sections not run.')
     return
@@ -145,7 +149,7 @@ async function main() {
   userId = u.id
   await cleanup()
 
-  projectId = (await pool.query(
+  projectId = (await work.query(
     `INSERT INTO projects (name, status) VALUES ($1,'active') RETURNING id`,
     [`${MARKER} Project`]
   )).rows[0].id
@@ -156,7 +160,7 @@ async function main() {
   let hookSeq = 0
   const makeWebhook = async (overrides = {}) => {
     const url = overrides.url || SECRET_URL.replace(/.{4}$/, String(1000 + hookSeq++))
-    const { rows } = await pool.query(
+    const { rows } = await integrations.query(
       `INSERT INTO teams_webhooks
          (project_id, name, webhook_url, url_hint, event_types, created_by, enabled)
        VALUES ($1,$2,$3,$4,$5::text[],$6,COALESCE($7,TRUE))
@@ -192,7 +196,7 @@ async function main() {
       sent[0].body.__meta === undefined, JSON.stringify(Object.keys(sent[0].body)))
     check('the wire payload is a valid message envelope', sent[0].body.type === 'message')
 
-    const log = (await pool.query(
+    const log = (await integrations.query(
       `SELECT * FROM teams_delivery_log WHERE webhook_id = $1`, [webhook.id]
     )).rows[0]
     check('a delivery log row was written', Boolean(log))
@@ -229,13 +233,13 @@ async function main() {
     check('reports failure', result.ok === false)
     check('classified transient', result.reason === 'transient', result.reason)
 
-    const log = (await pool.query(
+    const log = (await integrations.query(
       `SELECT * FROM teams_delivery_log WHERE webhook_id = $1`, [webhook.id]
     )).rows[0]
     check('parked as pending for the retry sweep', log.status === 'pending', log.status)
     check('with a future next_attempt_at', new Date(log.next_attempt_at) > new Date())
 
-    const wh = (await pool.query(`SELECT * FROM teams_webhooks WHERE id=$1`, [webhook.id])).rows[0]
+    const wh = (await integrations.query(`SELECT * FROM teams_webhooks WHERE id=$1`, [webhook.id])).rows[0]
     check('the failure streak advanced', wh.failure_count === 1, String(wh.failure_count))
     check('but the webhook stays enabled — one blip is not a fault',
       wh.enabled === true)
@@ -252,12 +256,12 @@ async function main() {
     await delivery.postToWebhook(webhook, cards.genericCard({ title: 'T' }), { http })
     console.error = origErr
 
-    const wh = (await pool.query(`SELECT * FROM teams_webhooks WHERE id=$1`, [webhook.id])).rows[0]
+    const wh = (await integrations.query(`SELECT * FROM teams_webhooks WHERE id=$1`, [webhook.id])).rows[0]
     check('the webhook was auto-disabled', wh.enabled === false)
     check('with a human-readable reason', /no longer exists/i.test(wh.disabled_reason || ''),
       wh.disabled_reason)
 
-    const notes = (await pool.query(
+    const notes = (await notify.query(
       `SELECT * FROM notifications WHERE user_id=$1 AND type='teams_webhook_disabled'`, [userId]
     )).rows
     check('the configuring user was notified', notes.length >= 1, String(notes.length))
@@ -374,7 +378,7 @@ async function main() {
 
   console.log('\n15. The API never returns the webhook URL')
   {
-    const webhook = (await pool.query(
+    const webhook = (await integrations.query(
       `SELECT * FROM teams_webhooks WHERE id = $1`, [webhookId]
     )).rows[0]
     const publicShape = __internals.toPublicWebhook(webhook)
@@ -389,7 +393,7 @@ async function main() {
     check('the hint drops the credential path',
       !publicShape.urlHint.includes('secretpart'), publicShape.urlHint)
 
-    const stored = (await pool.query(
+    const stored = (await integrations.query(
       `SELECT webhook_url FROM teams_webhooks WHERE id=$1`, [webhookId]
     )).rows[0]
     check('the column holds ciphertext, not the URL',
@@ -403,7 +407,7 @@ async function main() {
     await delivery.postToWebhook(webhook, cards.genericCard({ title: 'T' }), {
       http: async () => { throw httpErr(503) },
     })
-    await pool.query(
+    await integrations.query(
       `UPDATE teams_delivery_log SET next_attempt_at = NOW() - interval '1 minute'
         WHERE webhook_id = $1`, [webhook.id]
     )
@@ -415,7 +419,7 @@ async function main() {
     check('claimed the due row', res.claimed >= 1, JSON.stringify(res))
     check('re-sent it', calls >= 1, String(calls))
 
-    const log = (await pool.query(
+    const log = (await integrations.query(
       `SELECT * FROM teams_delivery_log WHERE webhook_id=$1`, [webhook.id]
     )).rows[0]
     check('marked sent', log.status === 'sent', log.status)
@@ -424,7 +428,7 @@ async function main() {
     await delivery.runTeamsRetriesNow({ http: async () => { calls++; return { status: 200 } } })
     check('a later sweep does not re-send it', calls === before, String(calls))
 
-    const wh = (await pool.query(`SELECT * FROM teams_webhooks WHERE id=$1`, [webhook.id])).rows[0]
+    const wh = (await integrations.query(`SELECT * FROM teams_webhooks WHERE id=$1`, [webhook.id])).rows[0]
     check('a success resets the failure streak', wh.failure_count === 0, String(wh.failure_count))
   }
 
@@ -435,13 +439,13 @@ async function main() {
       http: async () => ({ status: 200 }),
     })
 
-    await pool.query(`DELETE FROM teams_webhooks WHERE id = $1`, [webhook.id])
+    await integrations.query(`DELETE FROM teams_webhooks WHERE id = $1`, [webhook.id])
 
     const matches = await delivery.findWebhooksFor(projectId, 'task_assigned')
     check('it is no longer selected for any event',
       !matches.some((w) => w.id === webhook.id))
 
-    const logs = (await pool.query(
+    const logs = (await integrations.query(
       `SELECT * FROM teams_delivery_log WHERE webhook_id = $1`, [webhook.id]
     )).rows
     check('its delivery history cascaded away with it', logs.length === 0, String(logs.length))

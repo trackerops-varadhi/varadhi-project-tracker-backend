@@ -13,7 +13,18 @@
  */
 
 require('dotenv').config()
-const pool = require('./db')
+
+// The identity pool, not the default one. Every table this file touches
+// (user_tokens, and the users it references) belongs to identity, and after the
+// Phase 2 schema split they are no longer in `public` — the default pool's
+// search_path cannot see them, which is why this migration began failing at
+// every boot with `relation "users" does not exist`.
+//
+// This is also correct BEFORE the split: search_path is `identity,public,
+// extensions`, Postgres ignores schemas that do not exist, so on an unsplit
+// database the path collapses to `public` and CREATE TABLE lands exactly where
+// it always did. One line, both eras.
+const pool = require('../platform/db').forSchema('identity')
 
 // Statement list is shared with migrate.js so the two can never drift.
 const USER_TOKEN_MIGRATION_STATEMENTS = [

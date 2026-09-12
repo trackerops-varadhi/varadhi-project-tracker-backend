@@ -7,7 +7,11 @@
  *   node scripts/push-retry.test.js
  */
 require('dotenv').config()
-const pool = require('../src/config/db')
+// `pool` is notify's: push_delivery_retries, push_subscriptions and
+// notifications are all notify-owned. The one users lookup below goes to
+// identity's pool instead — the default pool cannot see either after the
+// Phase 2 schema split.
+const { notify: pool, identity } = require('./test-pools')
 const retry = require('../src/modules/notify/push-retry')
 const engine = require('../src/modules/notify/engine')
 
@@ -26,7 +30,7 @@ const cleanup = async () => {
 }
 
 async function main() {
-  const u = (await pool.query(`SELECT id FROM users WHERE status='active' LIMIT 1`)).rows[0]
+  const u = (await identity.query(`SELECT id FROM users WHERE status='active' LIMIT 1`)).rows[0]
   if (!u) { console.log('SKIP — no active user.'); return }
   userId = u.id
 

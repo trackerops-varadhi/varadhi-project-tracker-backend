@@ -1,5 +1,7 @@
 require('dotenv').config()
-const pool = require('../config/db')
+// time_logs is owned by workforce; after the Phase 2 schema split the default pool's
+// search_path (public) can no longer see it.
+const pool = require('../platform/db').forSchema('workforce')
 
 async function run() {
   const client = await pool.connect()

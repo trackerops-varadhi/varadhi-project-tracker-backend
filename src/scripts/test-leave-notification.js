@@ -1,5 +1,9 @@
 require('dotenv').config()
-const pool = require('../config/db')
+// Two modules: users belongs to identity, notifications to notify. After the
+// Phase 2 schema split neither is reachable from the default pool.
+const db = require('../platform/db')
+const identity = db.forSchema('identity')
+const notify = db.forSchema('notify')
 
 async function run() {
   try {
@@ -26,7 +30,7 @@ async function run() {
     console.log('Leave creation response:', leaveJson.message || JSON.stringify(leaveJson))
 
     // Find manager user id
-    const mgrRes = await pool.query('SELECT id FROM users WHERE email = $1', ['manager@local.test'])
+    const mgrRes = await identity.query('SELECT id FROM users WHERE email = $1', ['manager@local.test'])
     const mgrId = mgrRes.rows[0]?.id
     if (!mgrId) {
       console.error('Manager user not found in DB.')
@@ -34,7 +38,7 @@ async function run() {
     }
 
     // Query recent notifications for manager
-    const notifs = await pool.query('SELECT id,type,title,message,is_read,link_to,created_at FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10', [mgrId])
+    const notifs = await notify.query('SELECT id,type,title,message,is_read,link_to,created_at FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10', [mgrId])
     console.log('Manager notifications (most recent):')
     console.dir(notifs.rows, { depth: null })
     process.exit(0)

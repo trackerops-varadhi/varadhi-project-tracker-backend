@@ -31,7 +31,10 @@
 
 require('dotenv').config()
 const axios = require('axios')
-const pool = require('../src/config/db')
+// The identity module's pool: every table this suite touches (users,
+// user_sessions, user_tokens) is owned by identity. The default pool cannot
+// see them after the Phase 2 schema split.
+const pool = require('./test-pools').identity
 
 const BASE = 'http://localhost:5000/api'
 const EMAIL = `zz-session-test-${Date.now()}@varadhi.test`

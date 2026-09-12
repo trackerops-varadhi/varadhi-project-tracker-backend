@@ -21,8 +21,11 @@
  *   node scripts/sibling-sync.test.js
  */
 require('dotenv').config()
-const jwt = require('jsonwebtoken')
-const pool = require('../src/config/db')
+// One pool per module, because the tables this suite touches are owned by
+// different modules and the Phase 2 schema split put each in its own schema.
+// Each query below goes to the pool of the module that owns its table; the
+// old single `pool` (src/config/db) can no longer see any of them.
+const { identity, notify, work } = require('./test-pools')
 
 const API = process.env.TEST_API_BASE || 'http://127.0.0.1:5000/api'
 const ACTIONS = JSON.stringify([
@@ -36,26 +39,28 @@ const check = (name, cond, extra = '') => {
   if (cond) { pass++; console.log(`  PASS  ${name}`) }
   else { fail++; console.log(`  FAIL  ${name} ${extra}`) }
 }
-const token = (id) => jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '5m' })
+// Real session + cookie; the Bearer path was removed in b0bd3ee.
+// See scripts/test-auth.js.
+const { authHeaders } = require('./test-auth')
 
 let taskId = null
 let linkTo = null
 
 async function main() {
-  const admin = (await pool.query(
+  const admin = (await identity.query(
     `SELECT id, name FROM users WHERE role = 'admin' AND status = 'active' LIMIT 1`)).rows[0]
-  const managers = (await pool.query(
+  const managers = (await identity.query(
     `SELECT id, name FROM users WHERE role = 'manager' AND status = 'active' LIMIT 3`)).rows
-  const employee = (await pool.query(
+  const employee = (await identity.query(
     `SELECT id FROM users WHERE role = 'employee' AND status = 'active' LIMIT 1`)).rows[0]
-  const project = (await pool.query(`SELECT id FROM projects LIMIT 1`)).rows[0]
+  const project = (await work.query(`SELECT id FROM projects LIMIT 1`)).rows[0]
 
   if (!admin || managers.length < 2 || !employee || !project) {
     console.log('SKIP — needs an admin, 2+ managers, an employee and a project.')
     return
   }
 
-  taskId = (await pool.query(
+  taskId = (await work.query(
     `INSERT INTO tasks (title, description, status, priority, project_id, assignee_id, reporter_id)
      VALUES ('ZZ sibling-sync probe', 'regression fixture', 'in_review', 'medium', $1, $2, $3)
      RETURNING id`,
@@ -64,7 +69,7 @@ async function main() {
 
   const ids = {}
   for (const u of [admin, ...managers]) {
-    ids[u.id] = (await pool.query(
+    ids[u.id] = (await notify.query(
       `INSERT INTO notifications (user_id, type, title, message, link_to, priority, actions)
        VALUES ($1, 'review_requested', 'ZZ Review Requested', 'fixture', $2, 'high', $3::jsonb)
        RETURNING id`,
@@ -76,7 +81,7 @@ async function main() {
   // ---- Admin approves through the real endpoint --------------------------
   const res = await fetch(`${API}/notification-actions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token(admin.id)}` },
+    headers: await authHeaders(admin.id, { 'user-agent': 'ZZ sibling-sync.test.js' }),
     body: JSON.stringify({ notificationId: ids[admin.id], action: 'approve', source: 'in_app' }),
   })
   const body = await res.json()
@@ -88,18 +93,18 @@ async function main() {
     body.data?.siblingsResolved === managers.length, String(body.data?.siblingsResolved))
 
   console.log('\n2. Action persisted server-side')
-  const actor = (await pool.query(
+  const actor = (await notify.query(
     'SELECT action_taken, actioned_at FROM notifications WHERE id = $1', [ids[admin.id]])).rows[0]
   check('actor row action_taken = approve', actor.action_taken === 'approve', actor.action_taken)
   check('actor row actioned_at set', Boolean(actor.actioned_at))
   check('task is completed',
-    (await pool.query('SELECT status FROM tasks WHERE id = $1', [taskId])).rows[0].status === 'completed')
+    (await work.query('SELECT status FROM tasks WHERE id = $1', [taskId])).rows[0].status === 'completed')
 
   // ---- The actual regression: a FRESH fetch as every other manager -------
   console.log('\n3. Fresh notification fetch as each other manager')
   for (const m of managers) {
     const r = await fetch(`${API}/notifications?limit=50`, {
-      headers: { Authorization: `Bearer ${token(m.id)}` },
+      headers: await authHeaders(m.id, { 'user-agent': 'ZZ sibling-sync.test.js' }),
     })
     const list = (await r.json()).data?.notifications || []
     const row = list.find((n) => n.id === ids[m.id])
@@ -127,7 +132,7 @@ async function main() {
   console.log('\n4. The action is not applied twice')
   const stale = await fetch(`${API}/notification-actions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token(managers[0].id)}` },
+    headers: await authHeaders(managers[0].id, { 'user-agent': 'ZZ sibling-sync.test.js' }),
     body: JSON.stringify({ notificationId: ids[managers[0].id], action: 'approve', source: 'in_app' }),
   })
   const staleBody = await stale.json()
@@ -135,23 +140,23 @@ async function main() {
     !(stale.status === 200 && staleBody.data?.status === 'applied'),
     `${stale.status} ${JSON.stringify(staleBody.data || staleBody.message).slice(0, 120)}`)
   check('task still completed (not re-mutated)',
-    (await pool.query('SELECT status FROM tasks WHERE id = $1', [taskId])).rows[0].status === 'completed')
+    (await work.query('SELECT status FROM tasks WHERE id = $1', [taskId])).rows[0].status === 'completed')
 
   console.log('\n5. Unread count is not double-decremented')
-  const readCount = (await pool.query(
+  const readCount = (await notify.query(
     `SELECT COUNT(*)::int c FROM notifications
       WHERE link_to = $1 AND type = 'review_requested' AND is_read = true`, [linkTo])).rows[0].c
   check('exactly one row marked read — the actor’s', readCount === 1, `read rows = ${readCount}`)
 
   console.log('\n6. Siblings of an UNRELATED notification are untouched')
-  const other = (await pool.query(
+  const other = (await notify.query(
     `INSERT INTO notifications (user_id, type, title, message, link_to, priority, actions)
      VALUES ($1, 'review_requested', 'ZZ Unrelated', 'fixture', '/tasks/zz-unrelated', 'high', $2::jsonb)
      RETURNING id`, [managers[0].id, ACTIONS])).rows[0].id
-  const otherRow = (await pool.query(
+  const otherRow = (await notify.query(
     'SELECT action_taken FROM notifications WHERE id = $1', [other])).rows[0]
   check('different link_to not resolved', otherRow.action_taken === null, String(otherRow.action_taken))
-  await pool.query('DELETE FROM notifications WHERE id = $1', [other])
+  await notify.query('DELETE FROM notifications WHERE id = $1', [other])
 }
 
 main()
@@ -159,14 +164,14 @@ main()
   .finally(async () => {
     // Marker-driven teardown: safe even if the run died half way through.
     if (linkTo) {
-      await pool.query('DELETE FROM notifications WHERE link_to = $1', [linkTo]).catch(() => {})
+      await notify.query('DELETE FROM notifications WHERE link_to = $1', [linkTo]).catch(() => {})
     }
     if (taskId) {
-      await pool.query('DELETE FROM notification_action_log WHERE resource_id = $1', [taskId]).catch(() => {})
-      await pool.query('DELETE FROM tasks WHERE id = $1', [taskId]).catch(() => {})
+      await notify.query('DELETE FROM notification_action_log WHERE resource_id = $1', [taskId]).catch(() => {})
+      await work.query('DELETE FROM tasks WHERE id = $1', [taskId]).catch(() => {})
     }
-    await pool.query(`DELETE FROM notifications WHERE title LIKE 'ZZ %'`).catch(() => {})
-    await pool.query(`DELETE FROM tasks WHERE title LIKE 'ZZ %'`).catch(() => {})
+    await notify.query(`DELETE FROM notifications WHERE title LIKE 'ZZ %'`).catch(() => {})
+    await work.query(`DELETE FROM tasks WHERE title LIKE 'ZZ %'`).catch(() => {})
     console.log(`\n${pass} passed, ${fail} failed`)
     process.exit(fail ? 1 : 0)
   })

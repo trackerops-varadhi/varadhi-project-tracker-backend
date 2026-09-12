@@ -44,7 +44,11 @@
  */
 
 require('dotenv').config()
-const pool = require('./db')
+
+// The identity pool — see migrate-user-tokens.js for the full reasoning. Every
+// table here (user_sessions, and the user_tokens it backfills from) is owned by
+// identity, and the default pool cannot reach them after the Phase 2 split.
+const pool = require('../platform/db').forSchema('identity')
 
 // Statement list is shared with migrate.js so the two can never drift.
 // Each entry runs in order inside one transaction.

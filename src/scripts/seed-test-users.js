@@ -1,5 +1,7 @@
 require('dotenv').config()
-const pool = require('../config/db')
+// users is owned by identity; after the Phase 2 schema split the default pool's
+// search_path (public) can no longer see it.
+const pool = require('../platform/db').forSchema('identity')
 const bcrypt = require('bcryptjs')
 
 async function seed() {

@@ -14,8 +14,11 @@
  */
 
 require('dotenv').config()
-const jwt = require('jsonwebtoken')
-const pool = require('../src/config/db')
+// One pool per module, because the tables this suite touches are owned by
+// different modules and the Phase 2 schema split put each in its own schema.
+// Each query below goes to the pool of the module that owns its table; the
+// old single `pool` (src/config/db) can no longer see any of them.
+const { defects, identity, notify, work, endAll } = require('./test-pools')
 // Through the defects module's public interface — the SLA sweep moved into
 // modules/defects/sla-cron.js and is no longer reachable at utils/.
 const { runSlaSweepNow: runBugSlaSweepNow } = require('../src/modules/defects')
@@ -37,17 +40,14 @@ const check = (name, condition, extra = '') => {
   }
 }
 
-const token = (id) => jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '15m' })
-
-const headers = (userId) => ({
-  'Content-Type': 'application/json',
-  Authorization: `Bearer ${token(userId)}`,
-})
+// Real sessions + cookies. The Bearer path this suite used was removed in
+// b0bd3ee; see scripts/test-auth.js for the full reasoning.
+const { authHeaders } = require('./test-auth')
 
 async function api(method, path, userId, body) {
   const res = await fetch(`${API}${path}`, {
     method,
-    headers: headers(userId),
+    headers: await authHeaders(userId, { 'user-agent': 'ZZ bugs.test.js' }),
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   let json = null
@@ -65,13 +65,13 @@ const created = { bugs: [], tasks: [], projects: [] }
 async function main() {
   // ─── Fixtures ─────────────────────────────────────────────────────────────
   const admin = (
-    await pool.query(`SELECT id, name FROM users WHERE role = 'admin' AND status = 'active' LIMIT 1`)
+    await identity.query(`SELECT id, name FROM users WHERE role = 'admin' AND status = 'active' LIMIT 1`)
   ).rows[0]
   const manager = (
-    await pool.query(`SELECT id, name FROM users WHERE role = 'manager' AND status = 'active' LIMIT 1`)
+    await identity.query(`SELECT id, name FROM users WHERE role = 'manager' AND status = 'active' LIMIT 1`)
   ).rows[0]
   const devs = (
-    await pool.query(
+    await identity.query(
       `SELECT id, name FROM users WHERE role = 'employee' AND status = 'active' LIMIT 2`
     )
   ).rows
@@ -83,7 +83,7 @@ async function main() {
   const [dev, otherDev] = devs
 
   const project = (
-    await pool.query(
+    await work.query(
       `INSERT INTO projects (name, description, status, manager_id)
             VALUES ('ZZ Bugs Finder probe', 'test fixture', 'active', $1) RETURNING id`,
       [manager.id]
@@ -198,7 +198,7 @@ async function main() {
     check('open bug auto-advances to Assigned', res.data?.status === 'assigned', `got ${res.data?.status}`)
     check('first response stamped', Boolean(res.data?.sla?.firstResponseAt))
 
-    const notif = await pool.query(
+    const notif = await notify.query(
       `SELECT type, link_to FROM notifications WHERE user_id = $1 AND link_to = $2 ORDER BY created_at DESC LIMIT 1`,
       [dev.id, `/bugs/${bugId}`]
     )
@@ -296,7 +296,7 @@ async function main() {
     const activity = await api('GET', `/bugs/${bugId}/activity`, admin.id)
     check('BUG_COMMENT_ADDED logged', activity.data?.some((a) => a.action === 'BUG_COMMENT_ADDED'))
 
-    const reporterNotif = await pool.query(
+    const reporterNotif = await notify.query(
       `SELECT type FROM notifications WHERE user_id = $1 AND type = 'bug_comment' LIMIT 1`,
       [admin.id]
     )
@@ -417,7 +417,7 @@ async function main() {
 
     // Backdate the deadline rather than waiting four hours. The sweep still
     // makes its decision with the SERVER's NOW(), which is the point.
-    await pool.query(
+    await defects.query(
       `UPDATE bugs SET sla_resolution_due_at = NOW() - INTERVAL '1 hour',
                        sla_started_at = NOW() - INTERVAL '5 hours'
         WHERE id = $1`,
@@ -436,13 +436,13 @@ async function main() {
 
     await runBugSlaSweepNow()
 
-    const latched = await pool.query('SELECT sla_breached FROM bugs WHERE id = $1', [breach.data.id])
+    const latched = await defects.query('SELECT sla_breached FROM bugs WHERE id = $1', [breach.data.id])
     check('sweep latches sla_breached', latched.rows[0].sla_breached === true)
 
     const activity = await api('GET', `/bugs/${breach.data.id}/activity`, admin.id)
     check('BUG_SLA_BREACHED logged', activity.data?.some((a) => a.action === 'BUG_SLA_BREACHED'))
 
-    const notif = await pool.query(
+    const notif = await notify.query(
       `SELECT type FROM notifications WHERE user_id = $1 AND type = 'bug_sla_breached' LIMIT 1`,
       [dev.id]
     )
@@ -454,7 +454,7 @@ async function main() {
     })
     created.bugs.push(risk.data.id)
     await api('PATCH', `/bugs/${risk.data.id}/assign`, manager.id, { assigneeId: dev.id })
-    await pool.query(
+    await defects.query(
       `UPDATE bugs SET sla_started_at = NOW() - INTERVAL '8 hours',
                        sla_resolution_due_at = NOW() + INTERVAL '2 hours'
         WHERE id = $1`,
@@ -481,7 +481,7 @@ async function main() {
     check('task title carries the bug id', /BUG-\d+/.test(res.data?.linkedTask?.title || ''),
       `got ${res.data?.linkedTask?.title}`)
 
-    const task = await pool.query('SELECT type, project_id, priority FROM tasks WHERE id = $1', [taskId])
+    const task = await work.query('SELECT type, project_id, priority FROM tasks WHERE id = $1', [taskId])
     check('linked task is typed as a bug', task.rows[0]?.type === 'bug')
     check('linked task inherits the project', task.rows[0]?.project_id === project.id)
 
@@ -599,7 +599,7 @@ async function main() {
       check(`timeline contains ${action}`, timeline.includes(action), `have ${timeline.join(',')}`)
     }
 
-    const closeNotif = await pool.query(
+    const closeNotif = await notify.query(
       `SELECT type FROM notifications WHERE user_id = $1 AND type = 'bug_closed' LIMIT 1`,
       [dev.id]
     )
@@ -612,7 +612,7 @@ async function main() {
     const byAdminDelete = await api('DELETE', `/bugs/${id}`, admin.id)
     check('admin can delete a bug', byAdminDelete.status === 200, `got ${byAdminDelete.status}`)
 
-    const cascaded = await pool.query('SELECT COUNT(*)::int c FROM bug_comments WHERE bug_id = $1', [id])
+    const cascaded = await defects.query('SELECT COUNT(*)::int c FROM bug_comments WHERE bug_id = $1', [id])
     check('comments cascade with the bug', cascaded.rows[0].c === 0)
     created.bugs = created.bugs.filter((b) => b !== id)
   }
@@ -636,18 +636,18 @@ main()
     // Fixture cleanup — always runs, even after a crash.
     try {
       for (const id of created.bugs) {
-        await pool.query('DELETE FROM bugs WHERE id = $1', [id]).catch(() => {})
+        await defects.query('DELETE FROM bugs WHERE id = $1', [id]).catch(() => {})
       }
       for (const id of created.tasks) {
-        await pool.query('DELETE FROM tasks WHERE id = $1', [id]).catch(() => {})
+        await work.query('DELETE FROM tasks WHERE id = $1', [id]).catch(() => {})
       }
       for (const id of created.projects) {
-        await pool.query('DELETE FROM tasks WHERE project_id = $1', [id]).catch(() => {})
-        await pool.query('DELETE FROM projects WHERE id = $1', [id]).catch(() => {})
+        await work.query('DELETE FROM tasks WHERE project_id = $1', [id]).catch(() => {})
+        await work.query('DELETE FROM projects WHERE id = $1', [id]).catch(() => {})
       }
-      await pool.query(`DELETE FROM notifications WHERE message LIKE '%ZZ %'`).catch(() => {})
+      await notify.query(`DELETE FROM notifications WHERE message LIKE '%ZZ %'`).catch(() => {})
     } finally {
-      await pool.end()
+      await endAll()
       process.exit(fail > 0 ? 1 : 0)
     }
   })

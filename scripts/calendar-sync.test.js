@@ -10,7 +10,11 @@
  */
 require('dotenv').config()
 
-const pool = require('../src/config/db')
+// One pool per module, because the tables this suite touches are owned by
+// different modules and the Phase 2 schema split put each in its own schema.
+// Each query below goes to the pool of the module that owns its table; the
+// old single `pool` (src/config/db) can no longer see any of them.
+const { identity, integrations, notify, work } = require('./test-pools')
 const sync = require('../src/modules/integrations/calendar-sync')
 const { createMockProvider } = require('../src/modules/integrations/calendar-providers')
 const { encrypt } = require('../src/modules/integrations/crypto')
@@ -30,9 +34,9 @@ let connectionId = null
 const MARKER = 'ZZCAL'
 
 const cleanup = async () => {
-  await pool.query(`DELETE FROM calendar_connections WHERE user_id = $1`, [userId]).catch(() => {})
-  await pool.query(`DELETE FROM tasks WHERE title LIKE '${MARKER}%'`).catch(() => {})
-  await pool.query(`DELETE FROM projects WHERE name LIKE '${MARKER}%'`).catch(() => {})
+  await integrations.query(`DELETE FROM calendar_connections WHERE user_id = $1`, [userId]).catch(() => {})
+  await work.query(`DELETE FROM tasks WHERE title LIKE '${MARKER}%'`).catch(() => {})
+  await work.query(`DELETE FROM projects WHERE name LIKE '${MARKER}%'`).catch(() => {})
 }
 
 async function main() {
@@ -208,7 +212,7 @@ async function main() {
   }
 
   // ── Database-backed integration ─────────────────────────────────────────
-  const u = (await pool.query(`SELECT id FROM users WHERE status='active' LIMIT 1`)).rows[0]
+  const u = (await identity.query(`SELECT id FROM users WHERE status='active' LIMIT 1`)).rows[0]
   if (!u) {
     console.log('\nSKIP — no active user; database-backed sections not run.')
     return
@@ -216,18 +220,18 @@ async function main() {
   userId = u.id
   await cleanup()
 
-  projectId = (await pool.query(
+  projectId = (await work.query(
     `INSERT INTO projects (name, description, status) VALUES ($1,'fixture','active') RETURNING id`,
     [`${MARKER} Project`]
   )).rows[0].id
 
-  taskId = (await pool.query(
+  taskId = (await work.query(
     `INSERT INTO tasks (title, description, status, priority, project_id, assignee_id, due_date)
      VALUES ($1,'fixture','todo','high',$2,$3, CURRENT_DATE + 3) RETURNING id`,
     [`${MARKER} Task`, projectId, userId]
   )).rows[0].id
 
-  connectionId = (await pool.query(
+  connectionId = (await integrations.query(
     `INSERT INTO calendar_connections
        (user_id, provider, account_email, access_token, refresh_token, token_expires_at, status)
      VALUES ($1,'google','demo@example.com',$2,$3, NOW() + interval '1 hour','connected')
@@ -235,17 +239,17 @@ async function main() {
     [userId, encrypt('mock-access-token'), encrypt('mock-refresh-token')]
   )).rows[0].id
 
-  await pool.query(
+  await integrations.query(
     `INSERT INTO calendar_sync_settings (connection_id, sync_milestones) VALUES ($1, FALSE)`,
     [connectionId]
   )
 
-  const connection = (await pool.query(
+  const connection = (await integrations.query(
     `SELECT * FROM calendar_connections WHERE id = $1`, [connectionId]
   )).rows[0]
 
   const provider = createMockProvider('google')
-  const links = async () => (await pool.query(
+  const links = async () => (await integrations.query(
     `SELECT * FROM calendar_event_links WHERE connection_id = $1`, [connectionId]
   )).rows
 
@@ -296,7 +300,7 @@ async function main() {
 
   console.log('\n8. A changed due date re-pushes (AC-17)')
   {
-    await pool.query(`UPDATE tasks SET due_date = CURRENT_DATE + 10 WHERE id = $1`, [taskId])
+    await work.query(`UPDATE tasks SET due_date = CURRENT_DATE + 10 WHERE id = $1`, [taskId])
     const dirtied = await sync.markSourceDirty('task', taskId)
     check('markSourceDirty flagged the link', dirtied === 1, String(dirtied))
 
@@ -318,7 +322,7 @@ async function main() {
   {
     let rejected = false
     try {
-      await pool.query(
+      await integrations.query(
         `INSERT INTO calendar_event_links (connection_id, source_type, source_id, state)
          VALUES ($1,'task',$2,'pending')`,
         [connectionId, taskId]
@@ -336,13 +340,13 @@ async function main() {
     // Simulate the user editing the event directly in Google...
     provider.__mutateRemotely(link.provider_event_id, { title: 'Edited in Google' })
     // ...while the task also changed in the tracker.
-    await pool.query(`UPDATE tasks SET title = $2 WHERE id = $1`, [taskId, `${MARKER} Task renamed`])
+    await work.query(`UPDATE tasks SET title = $2 WHERE id = $1`, [taskId, `${MARKER} Task renamed`])
     await sync.markSourceDirty('task', taskId)
 
     const result = await sync.syncConnection(connection, { provider })
     check('a conflict was detected', result.conflicts >= 1, JSON.stringify(result))
 
-    const conflicts = (await pool.query(
+    const conflicts = (await integrations.query(
       `SELECT * FROM calendar_sync_conflicts WHERE connection_id = $1`, [connectionId]
     )).rows
     check('the conflict was persisted for the UI', conflicts.length >= 1, String(conflicts.length))
@@ -350,7 +354,7 @@ async function main() {
       conflicts[0].resolution === 'use_tracker', conflicts[0].resolution)
     check('and recorded as resolved', Boolean(conflicts[0].resolved_at))
 
-    const notes = (await pool.query(
+    const notes = (await notify.query(
       `SELECT * FROM notifications
         WHERE user_id = $1 AND type = 'calendar_conflict_detected'`, [userId]
     )).rows
@@ -359,7 +363,7 @@ async function main() {
 
   console.log('\n11. A task leaving scope removes its event (AC-18)')
   {
-    await pool.query(`UPDATE tasks SET status = 'completed' WHERE id = $1`, [taskId])
+    await work.query(`UPDATE tasks SET status = 'completed' WHERE id = $1`, [taskId])
     const result = await sync.syncConnection(connection, { provider })
 
     check('the orphaned event was removed', result.removed >= 1, JSON.stringify(result))
@@ -367,7 +371,7 @@ async function main() {
       String(ownEvents().length))
     check('and its link row was cleaned up', (await ownLink()) === undefined)
 
-    await pool.query(`UPDATE tasks SET status = 'todo' WHERE id = $1`, [taskId])
+    await work.query(`UPDATE tasks SET status = 'todo' WHERE id = $1`, [taskId])
   }
 
   console.log('\n12. purgeSource removes events across connections (delete path)')
@@ -384,7 +388,7 @@ async function main() {
 
   console.log('\n13. Settings are honoured')
   {
-    await pool.query(
+    await integrations.query(
       `UPDATE calendar_sync_settings SET sync_tasks = FALSE WHERE connection_id = $1`,
       [connectionId]
     )
@@ -394,7 +398,7 @@ async function main() {
     check('with tasks disabled, nothing is scanned', result.scanned === 0, JSON.stringify(result))
     check('and nothing is created', provider.__calls.create === 0)
 
-    await pool.query(
+    await integrations.query(
       `UPDATE calendar_sync_settings SET sync_tasks = TRUE WHERE connection_id = $1`,
       [connectionId]
     )
@@ -408,7 +412,7 @@ async function main() {
       refresh_token: null,
       token_expires_at: new Date(Date.now() - 60000),
     }
-    await pool.query(
+    await integrations.query(
       `UPDATE calendar_connections SET refresh_token = NULL, token_expires_at = NOW() - interval '1 minute'
         WHERE id = $1`, [connectionId]
     )
@@ -416,13 +420,13 @@ async function main() {
     const result = await sync.syncConnection(broken, { provider })
     check('the sync reports failure rather than throwing', result.failed >= 1, JSON.stringify(result))
 
-    const row = (await pool.query(
+    const row = (await integrations.query(
       `SELECT status, last_error FROM calendar_connections WHERE id = $1`, [connectionId]
     )).rows[0]
     check('the connection is marked disconnected', row.status === 'disconnected', row.status)
     check('with a stored reason', Boolean(row.last_error))
 
-    const notes = (await pool.query(
+    const notes = (await notify.query(
       `SELECT * FROM notifications WHERE user_id = $1 AND type = 'calendar_sync_failed'`,
       [userId]
     )).rows
@@ -432,7 +436,7 @@ async function main() {
 
   console.log('\n15. Secrets are never stored in the clear')
   {
-    const row = (await pool.query(
+    const row = (await integrations.query(
       `SELECT access_token, refresh_token FROM calendar_connections WHERE id = $1`, [connectionId]
     )).rows[0]
     check('access_token is ciphertext', String(row.access_token || '').startsWith('v1:'),

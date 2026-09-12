@@ -7,8 +7,11 @@
  *   node scripts/concurrency.test.js
  */
 require('dotenv').config()
-const jwt = require('jsonwebtoken')
-const pool = require('../src/config/db')
+// One pool per module, because the tables this suite touches are owned by
+// different modules and the Phase 2 schema split put each in its own schema.
+// Each query below goes to the pool of the module that owns its table; the
+// old single `pool` (src/config/db) can no longer see any of them.
+const { identity, notify, work } = require('./test-pools')
 
 const API = process.env.TEST_API_BASE || 'http://127.0.0.1:5000/api'
 let pass = 0
@@ -17,27 +20,29 @@ const check = (n, c, e = '') => {
   if (c) { pass++; console.log(`  PASS  ${n}`) }
   else { fail++; console.log(`  FAIL  ${n} ${e}`) }
 }
-const token = (id) => jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '5m' })
+// Real session + cookie; the Bearer path was removed in b0bd3ee.
+// See scripts/test-auth.js.
+const { authHeaders } = require('./test-auth')
 
 let taskId = null
 
 async function main() {
-  const admin = (await pool.query(
+  const admin = (await identity.query(
     `SELECT id, name FROM users WHERE role = 'admin' AND status = 'active' LIMIT 1`)).rows[0]
-  const employee = (await pool.query(
+  const employee = (await identity.query(
     `SELECT id FROM users WHERE role = 'employee' AND status = 'active' LIMIT 1`)).rows[0]
-  const project = (await pool.query(`SELECT id FROM projects LIMIT 1`)).rows[0]
+  const project = (await work.query(`SELECT id FROM projects LIMIT 1`)).rows[0]
   if (!admin || !employee || !project) { console.log('SKIP — fixture users/project missing.'); return }
 
-  const H = { 'Content-Type': 'application/json', Authorization: `Bearer ${token(admin.id)}` }
+  const H = await authHeaders(admin.id, { 'user-agent': 'ZZ concurrency.test.js' })
 
   const fresh = async () => {
-    if (taskId) await pool.query('DELETE FROM tasks WHERE id = $1', [taskId]).catch(() => {})
-    taskId = (await pool.query(
+    if (taskId) await work.query('DELETE FROM tasks WHERE id = $1', [taskId]).catch(() => {})
+    taskId = (await work.query(
       `INSERT INTO tasks (title, description, status, priority, project_id, assignee_id, reporter_id)
        VALUES ('ZZ concurrency probe', 'fixture', 'todo', 'medium', $1, $2, $3) RETURNING id`,
       [project.id, employee.id, admin.id])).rows[0].id
-    const r = await pool.query('SELECT updated_at FROM tasks WHERE id = $1', [taskId])
+    const r = await work.query('SELECT updated_at FROM tasks WHERE id = $1', [taskId])
     return r.rows[0].updated_at.toISOString()
   }
 
@@ -60,7 +65,7 @@ async function main() {
       method: 'PATCH', headers: H,
       body: JSON.stringify({ status: 'in_progress', baseUpdatedAt: base }) })
     check('PATCH with correct base -> 200', r.status === 200, `got ${r.status}`)
-    const row = (await pool.query('SELECT status FROM tasks WHERE id=$1', [taskId])).rows[0]
+    const row = (await work.query('SELECT status FROM tasks WHERE id=$1', [taskId])).rows[0]
     check('status actually changed', row.status === 'in_progress', row.status)
   }
 
@@ -69,7 +74,7 @@ async function main() {
     const base = await fresh()
     // Someone else changes it first.
     await new Promise((r) => setTimeout(r, 15))
-    await pool.query(`UPDATE tasks SET status='completed', updated_at=NOW() WHERE id=$1`, [taskId])
+    await work.query(`UPDATE tasks SET status='completed', updated_at=NOW() WHERE id=$1`, [taskId])
 
     const r = await fetch(`${API}/tasks/${taskId}/status`, {
       method: 'PATCH', headers: H,
@@ -84,7 +89,7 @@ async function main() {
     check('returns attempted value for Mine-vs-Server', body.details?.attempted?.status === 'in_review')
     check('returns currentUpdatedAt for re-basing', Boolean(body.details?.currentUpdatedAt))
 
-    const row = (await pool.query('SELECT status FROM tasks WHERE id=$1', [taskId])).rows[0]
+    const row = (await work.query('SELECT status FROM tasks WHERE id=$1', [taskId])).rows[0]
     check('server value NOT overwritten', row.status === 'completed', row.status)
   }
 
@@ -92,7 +97,7 @@ async function main() {
   {
     const base = await fresh()
     await new Promise((r) => setTimeout(r, 15))
-    await pool.query(`UPDATE tasks SET priority='critical', updated_at=NOW() WHERE id=$1`, [taskId])
+    await work.query(`UPDATE tasks SET priority='critical', updated_at=NOW() WHERE id=$1`, [taskId])
 
     const r = await fetch(`${API}/tasks/${taskId}`, {
       method: 'PUT', headers: H,
@@ -103,7 +108,7 @@ async function main() {
     check('conflictFields identifies the clash',
       Array.isArray(body.details?.conflictFields) && body.details.conflictFields.includes('priority'),
       JSON.stringify(body.details?.conflictFields))
-    const row = (await pool.query('SELECT title, priority FROM tasks WHERE id=$1', [taskId])).rows[0]
+    const row = (await work.query('SELECT title, priority FROM tasks WHERE id=$1', [taskId])).rows[0]
     check('server priority preserved', row.priority === 'critical', row.priority)
     check('server title NOT partially applied', row.title === 'ZZ concurrency probe', row.title)
   }
@@ -112,7 +117,7 @@ async function main() {
   {
     const base = await fresh()
     await new Promise((r) => setTimeout(r, 15))
-    await pool.query(`UPDATE tasks SET status='in_progress', updated_at=NOW() WHERE id=$1`, [taskId])
+    await work.query(`UPDATE tasks SET status='in_progress', updated_at=NOW() WHERE id=$1`, [taskId])
 
     const conflict = await (await fetch(`${API}/tasks/${taskId}/status`, {
       method: 'PATCH', headers: H,
@@ -123,15 +128,15 @@ async function main() {
       method: 'PATCH', headers: H,
       body: JSON.stringify({ status: 'in_review', baseUpdatedAt: rebased }) })
     check('retry with server version -> 200', r.status === 200, `got ${r.status}`)
-    const row = (await pool.query('SELECT status FROM tasks WHERE id=$1', [taskId])).rows[0]
+    const row = (await work.query('SELECT status FROM tasks WHERE id=$1', [taskId])).rows[0]
     check('my value now applied', row.status === 'in_review', row.status)
   }
 
   console.log('\n6. Use Server — simply not sending leaves the server untouched')
   {
     await fresh()
-    await pool.query(`UPDATE tasks SET status='completed', updated_at=NOW() WHERE id=$1`, [taskId])
-    const row = (await pool.query('SELECT status FROM tasks WHERE id=$1', [taskId])).rows[0]
+    await work.query(`UPDATE tasks SET status='completed', updated_at=NOW() WHERE id=$1`, [taskId])
+    const row = (await work.query('SELECT status FROM tasks WHERE id=$1', [taskId])).rows[0]
     check('server value intact when client discards', row.status === 'completed', row.status)
   }
 
@@ -144,7 +149,7 @@ async function main() {
         body: JSON.stringify({ status: 'in_progress', baseUpdatedAt: bad }) })
       check(`"${bad}" -> 400 (never silently unguarded)`, r.status === 400, `got ${r.status}`)
     }
-    const row = (await pool.query('SELECT status FROM tasks WHERE id=$1', [taskId])).rows[0]
+    const row = (await work.query('SELECT status FROM tasks WHERE id=$1', [taskId])).rows[0]
     check('task unchanged by rejected requests', row.status === 'todo', row.status)
   }
 
@@ -169,7 +174,7 @@ async function main() {
   {
     const base = await fresh()
     const gone = taskId
-    await pool.query('DELETE FROM tasks WHERE id=$1', [gone])
+    await work.query('DELETE FROM tasks WHERE id=$1', [gone])
     taskId = null
     const r = await fetch(`${API}/tasks/${gone}/status`, {
       method: 'PATCH', headers: H,
@@ -181,9 +186,9 @@ async function main() {
 main()
   .catch((e) => { console.error('HARNESS ERROR:', e.message); fail++ })
   .finally(async () => {
-    if (taskId) await pool.query('DELETE FROM tasks WHERE id = $1', [taskId]).catch(() => {})
-    await pool.query(`DELETE FROM notifications WHERE title LIKE 'ZZ %'`).catch(() => {})
-    await pool.query(`DELETE FROM tasks WHERE title LIKE 'ZZ %'`).catch(() => {})
+    if (taskId) await work.query('DELETE FROM tasks WHERE id = $1', [taskId]).catch(() => {})
+    await notify.query(`DELETE FROM notifications WHERE title LIKE 'ZZ %'`).catch(() => {})
+    await work.query(`DELETE FROM tasks WHERE title LIKE 'ZZ %'`).catch(() => {})
     console.log(`\n${pass} passed, ${fail} failed`)
     process.exit(fail ? 1 : 0)
   })
