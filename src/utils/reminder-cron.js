@@ -24,7 +24,7 @@ const {
   dispatchNotification,
   notifyByRoles,
   NOTIFICATION_TYPES,
-} = require('./notification-engine');
+} = require('../modules/notify');
 
 function runQuery(text, params = []) {
   if (typeof dbModule.query === 'function') return dbModule.query(text, params);

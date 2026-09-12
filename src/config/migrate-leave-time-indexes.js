@@ -1,8 +1,8 @@
 // Indexes for the Module 6/7 leave + time tables (release/v2.0-test).
 //
-// Both tables shipped without a single index, so every query in
-// leaveManagement.controller.js and timeManagement.controller.js is a
-// sequential scan. The two hot paths are:
+// Both tables shipped without a single index, so every query in what is now
+// modules/workforce/{leave,time}.repo.js is a sequential scan. The two hot
+// paths are:
 //   - getTimeLogs / getLeaveRequests: filter by user_id, order by date DESC
 //   - checkOut: filter by (user_id, date) on EVERY check-out
 //

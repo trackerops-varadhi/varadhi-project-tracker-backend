@@ -9,7 +9,7 @@
  */
 require('dotenv').config()
 
-const crypto = require('../src/utils/crypto')
+const crypto = require('../src/modules/integrations/crypto')
 
 let pass = 0, fail = 0
 const check = (n, c, e = '') => {

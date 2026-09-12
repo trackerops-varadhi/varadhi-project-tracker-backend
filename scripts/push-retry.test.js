@@ -8,8 +8,8 @@
  */
 require('dotenv').config()
 const pool = require('../src/config/db')
-const retry = require('../src/utils/push-retry')
-const engine = require('../src/utils/notification-engine')
+const retry = require('../src/modules/notify/push-retry')
+const engine = require('../src/modules/notify/engine')
 
 let pass = 0, fail = 0
 const check = (n, c, e = '') => { c ? (pass++, console.log(`  PASS  ${n}`)) : (fail++, console.log(`  FAIL  ${n} ${e}`)) }
@@ -232,7 +232,7 @@ async function main() {
     check('dispatchToMany arity unchanged (6)', engine.dispatchToMany.length === 6)
 
     // A disabled category never reaches push, so it can never be retried.
-    const src = require('fs').readFileSync(`${__dirname}/../src/utils/notification-engine.js`, 'utf8')
+    const src = require('fs').readFileSync(`${__dirname}/../src/modules/notify/engine.js`, 'utf8')
     const gateAt = src.indexOf("skipped: 'category_disabled'")
     const pushAt = src.indexOf('const pushResult = await sendPush')
     const retryAt = src.indexOf('enqueueRetry')

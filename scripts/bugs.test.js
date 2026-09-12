@@ -16,7 +16,9 @@
 require('dotenv').config()
 const jwt = require('jsonwebtoken')
 const pool = require('../src/config/db')
-const { runBugSlaSweepNow } = require('../src/utils/bug-sla-cron')
+// Through the defects module's public interface — the SLA sweep moved into
+// modules/defects/sla-cron.js and is no longer reachable at utils/.
+const { runSlaSweepNow: runBugSlaSweepNow } = require('../src/modules/defects')
 
 const API = process.env.TEST_API_BASE || 'http://127.0.0.1:5000/api'
 

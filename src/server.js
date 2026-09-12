@@ -10,14 +10,6 @@ const { requireCsrfHeader } = require('./middleware/csrf.middleware')
 const userTokensMigrationPath = require.resolve('./config/migrate-user-tokens')
 const sessionsMigrationPath = require.resolve('./config/migrate-sessions')
 const { startReminderCron } = require('./utils/reminder-cron');
-const { startSnoozeCron } = require('./utils/snooze-cron');
-const { startPushRetryCron } = require('./utils/push-retry');
-const { startCalendarCron } = require('./utils/calendar-cron');
-const { startTeamsCron } = require('./utils/teams-cron');
-const { startTeamsFanout } = require('./utils/teams-fanout');
-const { startBugSlaCron } = require('./utils/bug-sla-cron');
-const { startSessionCleanupCron } = require('./utils/session-cleanup-cron');
-const notificationRoutes = require('./routes/notifications.routes');
 // const path = require('path')
 
 const app = express()
@@ -176,25 +168,33 @@ app.get('/health', (req, res) => {
 })
 
 // â”€â”€â”€ API Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-app.use('/api/auth',          require('./routes/auth.routes'))
 // Cookie transport diagnostics. 404s unless ENABLE_DIAGNOSTICS=true; remove the
 // env var once production login is confirmed working.
 app.use('/api/diag',          require('./routes/diagnostics.routes'))
-app.use('/api/users',         require('./routes/users.routes'))
-app.use('/api/projects',      require('./routes/projects.routes'))
-app.use('/api/tasks',         require('./routes/tasks.routes'))
-app.use('/api/dashboard',     require('./routes/dashboard.routes'))
-app.use('/api/documents',     require('./routes/documents.routes'))
-app.use('/api/reports',       require('./routes/reports.routes'))
-app.use('/api/notifications', require('./routes/notifications.routes'))
-app.use('/api/notification-actions', require('./routes/notification-actions.routes'))
-app.use('/api/folders',       require('./routes/folders.routes'))
-app.use('/api/calendar',      require('./routes/calendar.routes'))
-app.use('/api/teams',         require('./routes/teams.routes'))
-app.use('/api/leave-management', require('./routes/leave-management.routes'))
-app.use('/api/time-management', require('./routes/time-management.routes'))
-// Module 8: Bugs Finder
-app.use('/api/bugs',          require('./routes/bugs.routes'))
+// Migrated modules. Each one declares its own base paths in
+// modules/<name>/index.js, so a module owns its routing rather than server.js
+// knowing the layout of every domain. When a module is later extracted to its
+// own service, that same `mount` array becomes the service's route table and
+// the gateway rewrite rules derive from it.
+//
+// As each remaining domain moves out of routes/ + controllers/, delete its
+// legacy app.use line above and add the module to this list.
+const MODULES = [
+  require('./modules/identity'),
+  require('./modules/notify'),
+  require('./modules/workforce'),
+  require('./modules/files'),
+  require('./modules/defects'),
+  require('./modules/work'),
+  // insights owns no tables — it reads through work.analytics and identity, so
+  // it is mounted last, after everything it depends on.
+  require('./modules/insights'),
+  require('./modules/integrations'),
+]
+
+for (const mod of MODULES) {
+  for (const { path, router } of mod.mount || []) app.use(path, router)
+}
 
 // â”€â”€â”€ Error Handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const { errorHandler, notFound } = require('./middleware/error.middleware')
@@ -240,33 +240,23 @@ app.listen(PORT, () => {
   try {
     if (process.env.ENABLE_CRON !== 'false') {
     startReminderCron();
-    // Module 2 snooze re-delivery. Separate schedule (5-minutely vs hourly)
-    // and separate file, but the same on/off switch â€” ENABLE_CRON=false must
-    // stop every background sweep, not just the reminder one.
-    startSnoozeCron();
-    // Retries transient push delivery failures (AC-10). Same on/off switch;
-    // strictly downstream of routing, so it cannot re-notify anyone.
-    startPushRetryCron();
-    // Module 4: 5-minutely calendar sync, meeting the PRD's â‰¤5 min latency
-    // KPI by polling rather than provider push channels (which would need a
-    // publicly reachable callback URL).
-    startCalendarCron();
-    // Module 5: Teams delivery retries + daily/weekly digests.
-    startTeamsCron();
     // Module 8: Bugs Finder SLA sweep â€” flags at-risk and breached defects
     // against the server clock every 5 minutes.
-    startBugSlaCron();
-    // Daily prune of dead session and token rows, past their audit retention.
-    // Deletes only revoked/expired rows, so it can never sign anyone out.
-    startSessionCleanupCron();
+    // Jobs owned by a migrated module. The module says what its jobs are; the
+    // platform still decides whether to run them, so ENABLE_CRON keeps working
+    // as one switch and a job travels with its module when it is extracted.
+    for (const mod of MODULES) {
+      for (const job of mod.jobs || []) job.start();
+    }
   }
 
-  // Module 5 fan-out subscribes to the notification engine's EventEmitter, so
-  // Teams delivery happens on dispatch rather than on a schedule. It is NOT
-  // gated by ENABLE_CRON: that switch turns off background *sweeps*, whereas
-  // this is part of the request-time notification path â€” an instance with
-  // crons disabled must still post events to configured channels.
-  startTeamsFanout();
+  // Event subscriptions, deliberately OUTSIDE the ENABLE_CRON switch. These fire
+  // on the request path, not on a schedule: turning the sweeps off must not stop
+  // a notification reaching Teams, or a deleted task's calendar event being
+  // reaped. Each module declares its own; all are idempotent.
+  for (const mod of MODULES) {
+    if (typeof mod.subscribe === 'function') mod.subscribe();
+  }
   } finally {
     // Restored in `finally` so a throwing cron registration cannot leave the
     // process with a patched console.log for the rest of its life.

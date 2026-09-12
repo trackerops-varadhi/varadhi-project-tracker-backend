@@ -214,7 +214,9 @@ async function rawLoginCookies(email, password) {
    * the remaining triggers (logout, password change, replay detection) all
    * funnel through these same two functions.
    */
-  const { revokeSession, REVOKE_REASONS } = require('../src/services/session.service')
+  // Session administration moved into modules/identity; reached through its
+  // public interface rather than the service file directly.
+  const { revokeSession, REVOKE_REASONS } = require('../src/modules/identity')
 
   const victim = makeJar()
   await call(victim, 'post', '/auth/login', { email: EMAIL, password: PASSWORD })

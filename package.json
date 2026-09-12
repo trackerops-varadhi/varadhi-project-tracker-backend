@@ -22,7 +22,8 @@
     "db:migrate:sessions": "node src/config/migrate-sessions.js",
     "test:sessions": "node scripts/sessions.test.js",
     "test:migration": "node scripts/migration-compat.test.js",
-    "test:security": "node scripts/security-audit.test.js"
+    "test:security": "node scripts/security-audit.test.js",
+    "lint:boundaries": "node scripts/check-boundaries.js"
   },
   "engines": {
     "node": ">=18.0.0"

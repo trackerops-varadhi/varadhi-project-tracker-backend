@@ -27,7 +27,10 @@
  */
 
 const router = require('express').Router()
-const { COOKIE_OPTIONS } = require('../config/cookies')
+// Through the identity module's interface — the cookie policy has exactly one
+// definition, and a diagnostic that described different flags from the ones
+// actually being set would be worse than no diagnostic.
+const { COOKIE_OPTIONS } = require('../modules/identity')
 
 const ENABLED = process.env.ENABLE_DIAGNOSTICS === 'true'
 

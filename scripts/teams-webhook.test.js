@@ -11,11 +11,11 @@
 require('dotenv').config()
 
 const pool = require('../src/config/db')
-const cards = require('../src/utils/teams-cards')
-const delivery = require('../src/utils/teams-delivery')
-const fanout = require('../src/utils/teams-fanout')
-const { encrypt, maskSecret } = require('../src/utils/crypto')
-const { __internals } = require('../src/controllers/teams.controller')
+const cards = require('../src/modules/integrations/teams-cards')
+const delivery = require('../src/modules/integrations/teams-delivery')
+const fanout = require('../src/modules/integrations/teams-fanout')
+const { encrypt, maskSecret } = require('../src/modules/integrations/crypto')
+const { __internals } = require('../src/modules/integrations/teams.controller')
 
 let pass = 0, fail = 0
 const check = (n, c, e = '') => {

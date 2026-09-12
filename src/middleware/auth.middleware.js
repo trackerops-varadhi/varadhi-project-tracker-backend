@@ -1,7 +1,12 @@
 /*
  * Authentication + role gate.
  * ---------------------------------------------------------------------------
- * Two things changed here, both load-bearing.
+ * Platform-level, not part of any module: every router in the app uses it. What
+ * it does is identity's decision, so the verification and the session lookup
+ * both come from that module's public interface — this file is the express
+ * adapter around them.
+ *
+ * Two things here are load-bearing.
  *
  * 1. THE BEARER FALLBACK IS GONE.
  *    The previous version accepted `Authorization: Bearer <jwt>` and verified
@@ -9,16 +14,12 @@
  *    revocation a no-op: a revoked session's access token kept working for its
  *    full 15 minutes simply by being sent in a header instead of a cookie. You
  *    cannot build "revoke this device" on top of a path that never asks whether
- *    the session is alive. Auth is now cookie-only.
- *
- *    Consequence, accepted at planning time: every existing token is refused
- *    once, and everyone signs in again. That is the cutover.
+ *    the session is alive. Auth is cookie-only.
  *
  * 2. ONE QUERY, NOT TWO.
- *    Access tokens are no longer stored, so there is no token row to look up.
- *    The signature is verified in-process, then a single indexed join resolves
- *    the session and the user together. Net effect versus the old code: one
- *    fewer round trip per request, and revocation actually works.
+ *    Access tokens are not stored, so there is no token row to look up. The
+ *    signature is verified in-process, then a single indexed join resolves the
+ *    session and the user together.
  *
  * The two failure codes matter to the client and are not interchangeable:
  *
@@ -30,9 +31,28 @@
  *                   burning a round trip discovering that.
  */
 
-const pool = require('../config/db')
-const { verifyAccessToken, TokenError } = require('../services/token.service')
-const { getActiveSessionWithUser } = require('../services/session.service')
+/*
+ * REQUIRE CYCLE — identity is required lazily, inside the handler.
+ *
+ * The cycle is: identity/index.js requires auth.routes.js, which requires this
+ * file, which needs identity. A top-level require here breaks depending on
+ * which side loads first:
+ *
+ *   identity first        -> identity -> auth.routes -> this file -> identity
+ *                            (partial, but only read at call time) ... works
+ *   this file first       -> this file -> identity -> auth.routes -> this file
+ *                            (partial: `protect` NOT YET ASSIGNED) ... throws
+ *                            "Route.get() requires a callback function but got
+ *                            [object Undefined]" at auth.routes' /me line
+ *
+ * server.js hits the second order, because a route file pulls in this
+ * middleware before identity is ever touched. Requiring inside the function
+ * removes the load-time edge entirely, so neither order matters. Same reason
+ * utils/teams-delivery.js lazy-requires the notification engine.
+ *
+ * require() is cached, so this costs a Map lookup per call, not a module load.
+ */
+const identity = () => require('../modules/identity')
 
 const unauthorized = (res, message, code) =>
   res.status(401).json({ success: false, message, code })
@@ -47,9 +67,9 @@ exports.protect = async (req, res, next) => {
   let claims
 
   try {
-    claims = verifyAccessToken(rawToken)
+    claims = identity().verifyAccessToken(rawToken)
   } catch (err) {
-    if (err instanceof TokenError) {
+    if (err instanceof identity().TokenError) {
       // TOKEN_EXPIRED tells the client to refresh; TOKEN_INVALID (bad
       // signature, wrong token type, pre-cutover token with no sessionId
       // claim) tells it not to bother.
@@ -65,7 +85,7 @@ exports.protect = async (req, res, next) => {
   }
 
   try {
-    const row = await getActiveSessionWithUser(claims.sessionId)
+    const row = await identity().getActiveSessionWithUser(claims.sessionId)
 
     // Covers revoked, expired, and deleted-user in one branch — every one of
     // them means "this session is over", and telling the client which is not
@@ -95,8 +115,7 @@ exports.protect = async (req, res, next) => {
     }
 
     // Same shape the rest of the codebase expects on req.user (id, name, email,
-    // role, status) — every controller reads those fields, so this stays
-    // exactly as it was.
+    // role, status) — every controller reads those fields.
     req.user = {
       id: row.id,
       name: row.name,
@@ -109,12 +128,10 @@ exports.protect = async (req, res, next) => {
     // spare it while revoking every other one).
     req.sessionId = row.session_id
 
-    // NOTE: no last_active_at write here. It existed to feed the Active
-    // Sessions list's "last active" column; with that UI removed nothing reads
-    // it per-request, so `protect` is now genuinely read-only — one indexed
-    // SELECT and nothing else. The column is still maintained on refresh (see
-    // extendSession), so the session row keeps a meaningful audit trail without
-    // a write on every authenticated request.
+    // NOTE: no last_active_at write here. `protect` is genuinely read-only —
+    // one indexed SELECT and nothing else. The column is still maintained on
+    // refresh (see extendSession), so the session row keeps a meaningful audit
+    // trail without a write on every authenticated request.
 
     return next()
   } catch (err) {
