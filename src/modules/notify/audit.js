@@ -29,6 +29,23 @@ const OUTCOMES = {
   RATE_LIMITED: 'rate_limited',
   SENT: 'sent',
   FAILED: 'failed',
+
+  /**
+   * The task write succeeded but this module's own claim did not.
+   *
+   * A notification action is two writes in two schemas — work moves the task,
+   * notify records that it happened — and since the Phase 2 split they cannot
+   * share a transaction. The task write is authoritative and goes first, so
+   * this outcome marks the window where the user's intent IS applied but the
+   * notification row has not caught up: buttons still showing for work already
+   * done. reconcilePendingClaims() closes it.
+   *
+   * It is not a failure of the action. The action succeeded.
+   */
+  APPLIED_CLAIM_PENDING: 'applied_claim_pending',
+
+  /** A previously pending claim that reconciliation has since completed. */
+  CLAIM_RECONCILED: 'claim_reconciled',
 }
 
 /**

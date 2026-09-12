@@ -306,6 +306,44 @@ exports.insertBugTask = async ({
   return rows[0]
 }
 
+/**
+ * Compare-and-swap a task's status: move `id` from `fromStatus` to `toStatus`,
+ * and do nothing at all if it is not currently in `fromStatus`.
+ *
+ * This is the concurrency primitive behind notification actions. It used to be
+ * an inline UPDATE inside notify's transaction, which worked only while both
+ * tables shared one schema. Now that `tasks` belongs to work, the guard has to
+ * live here — and it carries the whole mutex, because there is no longer a
+ * shared transaction to hold one.
+ *
+ * Two racing approvals both read status='todo' and both call this; Postgres
+ * serialises the two UPDATEs on the row, so exactly one matches the WHERE and
+ * the other returns zero rows. That is what makes a duplicate approval
+ * impossible without a cross-schema lock.
+ *
+ * @returns {Promise<{id, status, previous}|null>} null when the CAS did not match
+ */
+exports.compareAndSwapTaskStatus = async (id, fromStatus, toStatus) => {
+  // $4 carries "is this the completed state?" as its own boolean rather than
+  // re-testing $3. Using $3 both as the value for `status` and inside a text
+  // comparison makes Postgres deduce two different types for one parameter and
+  // fail with `inconsistent types deduced for parameter $3`.
+  const { rows } = await pool.query(
+    `UPDATE tasks
+        SET status = $3,
+            completed_at = CASE
+              WHEN $4 THEN COALESCE(completed_at, NOW())
+              ELSE NULL
+            END,
+            updated_at = NOW()
+      WHERE id = $1 AND status = $2
+      RETURNING id, status`,
+    [id, fromStatus, toStatus, toStatus === 'completed']
+  )
+  if (!rows[0]) return null
+  return { id: rows[0].id, status: rows[0].status, previous: fromStatus }
+}
+
 // The employee path: status only, on a task already confirmed to be theirs.
 exports.updateTaskStatusOnly = async (id, status) => {
   const { rows } = await pool.query(

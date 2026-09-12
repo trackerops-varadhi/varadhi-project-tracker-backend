@@ -192,6 +192,42 @@ exports.getSyncableMilestonesForUser = async (userId) => repo.findSyncableMilest
  */
 exports.setTaskDueDate = async (taskId, dueDate) => repo.updateTaskDueDate(taskId, dueDate)
 
+/**
+ * Apply a guarded status transition to a task, and say whether it took.
+ *
+ * This is the authoritative half of a notification action. notify used to do
+ * this UPDATE itself, inside its own transaction, back when `tasks` and
+ * `notifications` shared the `public` schema. They no longer do, so the write
+ * comes through here — and because there is no shared transaction left to lock
+ * with, the compare-and-swap below IS the mutex that stops an action being
+ * applied twice. A caller that loses the race gets `applied: false` together
+ * with the status it lost to, which is enough to tell "someone already did
+ * this" (currentStatus === toStatus) from "the task moved elsewhere".
+ *
+ * Emits TASK_CHANGED on success, exactly as the task routes do, so a calendar
+ * event still gets marked dirty when a task is approved from a notification.
+ *
+ * @returns {Promise<{applied: boolean, status: string|null, currentStatus: string|null}>}
+ */
+exports.applyTaskStatusTransition = async ({ taskId, fromStatus, toStatus }) => {
+  if (!taskId || !fromStatus || !toStatus) {
+    throw new Error('applyTaskStatusTransition requires taskId, fromStatus and toStatus')
+  }
+
+  const swapped = await repo.compareAndSwapTaskStatus(taskId, fromStatus, toStatus)
+
+  if (!swapped) {
+    // Report what it actually is, so the caller can distinguish an already-done
+    // action from a genuine conflict without a second round trip.
+    const ctx = await repo.findTaskActionContext(taskId)
+    return { applied: false, status: null, currentStatus: ctx ? ctx.status : null }
+  }
+
+  await events.emit(events.EVENTS.TASK_CHANGED, { taskId })
+
+  return { applied: true, status: swapped.status, currentStatus: swapped.status }
+}
+
 /** Upcoming unfinished tasks for a user, for the calendar preview. */
 exports.getUpcomingTasksForUser = async (userId, days, limit) =>
   repo.findUpcomingTasksForUser(userId, days, limit)

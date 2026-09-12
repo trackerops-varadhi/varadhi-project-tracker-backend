@@ -17,12 +17,25 @@
  * the PRD rule "Actionable notifications must re-validate permissions
  * server-side at the moment the action is taken, not only at send time".
  *
- * IDEMPOTENCY
- * The notification row is the idempotency record. A single conditional UPDATE
- * claims it; Postgres row-locking serialises concurrent taps so exactly one
- * caller wins. The winner applies the change and stores its response verbatim
- * in action_result inside the same transaction. Replays return that stored
- * result rather than re-applying.
+ * IDEMPOTENCY — read this before changing the order of the writes.
+ * The TASK ROW is the idempotency record, not the notification row.
+ *
+ * It used to be the notification: one conditional UPDATE claimed it and the
+ * task update rode along in the same transaction. The Phase 2 schema split
+ * ended that — `notifications` is in `notify`, `tasks` is in `work`, and no
+ * transaction spans them. So the guarantee moved to where the data is:
+ * work.applyTaskStatusTransition does a compare-and-swap on the task's status,
+ * Postgres serialises concurrent taps on that row, and exactly one caller wins.
+ * A loser sees the task already in the destination state and returns
+ * "superseded" rather than applying anything twice.
+ *
+ * The notification claim still happens, still guarded by `action_taken IS
+ * NULL`, and still stores its response in action_result for replays. What it no
+ * longer does is decide whether the action takes effect.
+ *
+ * ORDER IS LOAD-BEARING: apply the task first, claim the notification second.
+ * See the long comment at step 7 for why that direction and not the reverse,
+ * and what happens in the window between them.
  */
 
 const pool = require('../../platform/db').forSchema('notify')
@@ -322,7 +335,70 @@ async function performAction(req, res, next) {
         409, { currentStatus: task.status })
     }
 
-    // --- 7. Claim + apply, atomically.
+    /* --- 7. Apply, then claim. TWO transactions, in that order. ------------
+     *
+     * This was one transaction over `notifications` and `tasks`. Since the
+     * Phase 2 split those live in different schemas and notify's pool cannot
+     * see `tasks` at all, so the atomic version is simply not available any
+     * more. What replaces it:
+     *
+     *   7a  work applies the status transition          <- AUTHORITATIVE
+     *   7b  notify claims the notification + siblings   <- eventually consistent
+     *
+     * WHY THIS ORDER. The task change is what the user actually asked for and
+     * the only part that must never be lost. The notification row is a record
+     * that it happened. Claiming first and failing to apply would retire the
+     * buttons on work that never got done — silent, and unrecoverable without
+     * a human noticing. Applying first and failing to claim leaves buttons up
+     * on work that IS done — visible, harmless to click again, and fixable by
+     * reconcilePendingClaims(). We take the failure mode that is loud and
+     * repairable over the one that is quiet and wrong.
+     *
+     * WHERE THE MUTEX WENT. It used to be the `action_taken IS NULL` guard on
+     * the claim. It is now the compare-and-swap inside
+     * work.applyTaskStatusTransition: two concurrent approvals serialise on
+     * the task row and exactly one wins. The notification guard is still there
+     * and still correct, but it is no longer what prevents double application.
+     */
+
+    // --- 7a. The authoritative write, through work's public interface.
+    let transition
+    try {
+      transition = await work.applyTaskStatusTransition({
+        taskId: task.id,
+        fromStatus: spec.requiresStatus,
+        toStatus: spec.nextStatus,
+      })
+    } catch (err) {
+      await logAction({ notificationId, userId: actor.id, action, source: actionSource,
+        outcome: OUTCOMES.FAILED, resourceType: 'task', resourceId: task.id,
+        detail: { reason: 'task_update_failed', message: err.message } })
+      throw err
+    }
+
+    if (!transition.applied) {
+      // Lost the CAS. Either someone else already applied this exact action
+      // (current status is where we were going) or the task moved elsewhere.
+      const superseded = transition.currentStatus === spec.nextStatus
+      await logAction({ notificationId, userId: actor.id, action, source: actionSource,
+        outcome: superseded ? OUTCOMES.SUPERSEDED : OUTCOMES.CONFLICT,
+        resourceType: 'task', resourceId: task.id,
+        detail: { expected: spec.requiresStatus, actual: transition.currentStatus,
+          reason: 'lost_compare_and_swap' } })
+
+      if (superseded) {
+        return ok(res, {
+          notificationId, action, status: 'superseded',
+          taskId: task.id, taskStatus: transition.currentStatus, actionedAt: null,
+        }, 'This was already done.')
+      }
+      return fail(res, 'conflict',
+        'The task changed while your action was being applied. Please reload and try again.',
+        409, { currentStatus: transition.currentStatus })
+    }
+
+    // --- 7b. The task has moved. Everything below is bookkeeping about a fact
+    //         that is already true, and must not be able to undo it.
     const client = await pool.connect()
     let applied
     try {
@@ -338,7 +414,9 @@ async function performAction(req, res, next) {
       )
 
       if (claim.rowCount === 0) {
-        // Lost the race — another request claimed it between step 3 and here.
+        // Another request claimed this row between step 3 and here. It cannot
+        // have applied the task as well — we won that CAS — so this is only a
+        // bookkeeping collision. Report what the other claim recorded.
         await client.query('ROLLBACK')
         const fresh = await pool.query(
           `SELECT id, action_taken, actioned_at, action_result FROM notifications WHERE id = $1`,
@@ -347,39 +425,13 @@ async function performAction(req, res, next) {
         return replayResponse(res, fresh.rows[0], action, actor, actionSource)
       }
 
-      // Re-assert the status inside the transaction so a concurrent status
-      // change can't slip between the step-6 read and this write.
-      const upd = await client.query(
-        `UPDATE tasks
-            SET status = $1,
-                completed_at = $2,
-                updated_at = NOW()
-          WHERE id = $3 AND status = $4
-          RETURNING id, status`,
-        [
-          spec.nextStatus,
-          spec.nextStatus === 'completed' ? new Date() : null,
-          task.id,
-          spec.requiresStatus,
-        ]
-      )
-
-      if (upd.rowCount === 0) {
-        await client.query('ROLLBACK')
-        await logAction({ notificationId, userId: actor.id, action, source: actionSource,
-          outcome: OUTCOMES.CONFLICT, resourceType: 'task', resourceId: task.id,
-          detail: { reason: 'status_changed_during_transaction' } })
-        return fail(res, 'conflict',
-          'The task changed while your action was being applied. Please reload and try again.',
-          409, { currentStatus: null })
-      }
 
       applied = {
         notificationId,
         action,
         status: 'applied',
         taskId: task.id,
-        taskStatus: upd.rows[0].status,
+        taskStatus: transition.status,
         actionedAt: claim.rows[0].actioned_at,
       }
 
@@ -425,7 +477,7 @@ async function performAction(req, res, next) {
             byUserId: actor.id,
             byUserName: actor.name || null,
             taskId: task.id,
-            taskStatus: upd.rows[0].status,
+            taskStatus: transition.status,
           }),
           notification.link_to,
           notification.type,
@@ -442,8 +494,54 @@ async function performAction(req, res, next) {
 
       await client.query('COMMIT')
     } catch (err) {
+      /*
+       * The claim failed. The TASK IS ALREADY UPDATED and stays that way —
+       * rolling this transaction back cannot and must not undo it.
+       *
+       * Returning 500 here would be a lie: the thing the user asked for
+       * happened. Worse, it invites a retry, which now loses the CAS in 7a and
+       * comes back as "already done" — telling them their action failed and
+       * then that it was already applied. So we answer 200 with the truth,
+       * flagged `claimPending` so the client knows the notification row may
+       * lag, and leave a reconciliation record behind.
+       */
       await client.query('ROLLBACK').catch(() => {})
-      throw err
+      console.error(
+        `[notification-actions] CLAIM FAILED AFTER TASK APPLIED ` +
+        `notification=${notificationId} task=${task.id} action=${action} ` +
+        `actor=${actor.id}: ${err.message}`
+      )
+
+      // Separate transaction on purpose — the one above is dead. Failure-safe
+      // by contract (audit.js swallows), so this cannot mask the real outcome.
+      await logAction({
+        notificationId, userId: actor.id, action, source: actionSource,
+        outcome: OUTCOMES.APPLIED_CLAIM_PENDING,
+        resourceType: 'task', resourceId: task.id,
+        detail: {
+          from: spec.requiresStatus, to: spec.nextStatus,
+          linkTo: notification.link_to, notificationType: notification.type,
+          error: err.message,
+        },
+      })
+
+      applied = {
+        notificationId,
+        action,
+        status: 'applied',
+        taskId: task.id,
+        taskStatus: transition.status,
+        actionedAt: null,
+        claimPending: true,
+        siblingsResolved: 0,
+      }
+      // No release() here — the finally block below runs before this return
+      // completes and does it exactly once.
+
+      await notifyOutcome({ action, actor, task, spec }).catch((e) =>
+        console.error('[notification-actions] post-action notify failed:', e.message)
+      )
+      return ok(res, applied, messageFor(action, task.title))
     } finally {
       client.release()
     }

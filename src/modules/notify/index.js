@@ -14,6 +14,7 @@
 const engine = require('./engine')
 const snoozeCron = require('./snooze-cron')
 const pushRetry = require('./push-retry')
+const claimReconciler = require('./claim-reconciler')
 
 exports.mount = [
   { path: '/api/notifications', router: require('./notifications.routes') },
@@ -113,3 +114,15 @@ exports.notificationEvents = engine.notificationEvents
 exports.runPushRetriesNow = pushRetry.runPushRetriesNow
 exports.enqueueRetry = pushRetry.enqueueRetry
 exports.runSnoozesNow = snoozeCron.runSnoozesNow
+
+/**
+ * Complete any notification claims left pending by a failed second phase of a
+ * notification action — the task moved, this module's rows did not follow.
+ *
+ * Safe to run repeatedly; every write is guarded by `action_taken IS NULL`.
+ * Deliberately NOT on a cron: see claim-reconciler.js.
+ *
+ *   await notify.reconcilePendingClaims()                // repair
+ *   await notify.reconcilePendingClaims({ dryRun: true }) // just look
+ */
+exports.reconcilePendingClaims = claimReconciler.reconcilePendingClaims
