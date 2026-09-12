@@ -24,7 +24,12 @@
     "test:migration": "node scripts/migration-compat.test.js",
     "test:security": "node scripts/security-audit.test.js",
     "lint:boundaries": "node scripts/check-boundaries.js",
-    "test:ops": "node scripts/ops.test.js"
+    "test:ops": "node scripts/ops.test.js",
+    "migrate": "node src/config/migrate-runner.js up",
+    "migrate:status": "node src/config/migrate-runner.js status",
+    "migrate:down": "node src/config/migrate-runner.js down",
+    "migrate:baseline": "node src/config/migrate-runner.js baseline",
+    "test:migrate-system": "node scripts/migrate-system.test.js"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -43,6 +48,7 @@
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
     "node-cron": "^4.6.0",
+    "node-pg-migrate": "^7.9.1",
     "nodemailer": "^9.0.3",
     "pg": "^8.13.0",
     "web-push": "^3.6.7",
