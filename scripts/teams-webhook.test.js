@@ -309,7 +309,7 @@ async function main() {
 
   console.log('\n11. Fan-out delivers a subscribed event')
   {
-    const webhook = await makeWebhook({ eventTypes: ['task_assigned'] })
+    await makeWebhook({ eventTypes: ['task_assigned'] })
     fanout.__resetLedger()
 
     let calls = 0

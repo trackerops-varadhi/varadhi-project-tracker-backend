@@ -29,7 +29,10 @@
     "migrate:status": "node src/config/migrate-runner.js status",
     "migrate:down": "node src/config/migrate-runner.js down",
     "migrate:baseline": "node src/config/migrate-runner.js baseline",
-    "test:migrate-system": "node scripts/migrate-system.test.js"
+    "test:migrate-system": "node scripts/migrate-system.test.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test:ops-infra": "node scripts/ops-infra.test.js"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -55,6 +58,7 @@
     "ws": "^8.21.1"
   },
   "devDependencies": {
+    "eslint": "^9.39.5",
     "nodemon": "^3.1.7"
   }
 }

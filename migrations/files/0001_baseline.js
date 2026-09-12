@@ -26,8 +26,6 @@
  * which writes the ledger row without executing the body.
  */
 
-/* eslint-disable camelcase */
-
 exports.shorthands = undefined
 
 exports.up = (pgm) => {

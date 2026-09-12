@@ -1,0 +1,101 @@
+# Local development stack. NOT a deployment artifact.
+# -----------------------------------------------------------------------------
+#   docker compose up --build
+#   docker compose --profile multi up --build     # two backends + leader election
+#
+# WHAT THIS IS FOR
+# Running the backend against a throwaway Postgres, and — with the `multi`
+# profile — running TWO backend instances at once, which is the only way to
+# exercise the advisory-lock leader election and the shared rate-limit store the
+# way production would. Both were unfalsifiable before this file existed.
+#
+# NO SECRETS, NO PRODUCTION.
+# Every value below is either a literal throwaway credential for the local
+# container (`postgres`/`postgres` on a database that is deleted with the
+# volume) or a `${VAR}` placeholder read from the developer's shell. The Supabase
+# URL is never referenced. .env is excluded by .dockerignore and is not mounted.
+
+name: varadhi-local
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      # Throwaway. This database exists inside the compose network, holds test
+      # data, and dies with `docker compose down -v`.
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: varadhi_local
+    ports:
+      # Host-bound explicitly to loopback: without 127.0.0.1 Docker publishes on
+      # 0.0.0.0 and this database is reachable from the local network.
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      # The backend must not start before the database can answer, or boot
+      # migrations race an unready server.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d varadhi_local"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  backend:
+    build:
+      context: .
+      target: runtime
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 5000
+      LOG_FORMAT: json
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/varadhi_local
+      # Cron stays OFF by default here exactly as it is everywhere else. Turn it
+      # on deliberately when testing leader election.
+      ENABLE_CRON: ${ENABLE_CRON:-false}
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      RATE_LIMIT_STORE: ${RATE_LIMIT_STORE:-memory}
+      # Placeholders only — supplied by the developer's shell, never committed.
+      # Empty is fine locally: the code degrades (no push, no email) rather than
+      # failing, which is what makes a local stack usable without credentials.
+      JWT_SECRET: ${JWT_SECRET:-local-dev-only-not-a-real-secret}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+    ports:
+      - "127.0.0.1:5000:5000"
+
+  # Second instance. Same image, same database, same advisory lock — so exactly
+  # one of the two wins leadership and the other reports standby. Start it with
+  # `--profile multi`.
+  backend-2:
+    profiles: ["multi"]
+    build:
+      context: .
+      target: runtime
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 5000
+      LOG_FORMAT: json
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/varadhi_local
+      ENABLE_CRON: ${ENABLE_CRON:-false}
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      # Two instances sharing memory-backed counters would each enforce the full
+      # quota. The store refuses that combination at startup rather than
+      # silently allowing 2x the limit — which is the point of this profile.
+      RATE_LIMIT_STORE: ${RATE_LIMIT_STORE:-postgres}
+      MULTI_INSTANCE: "true"
+      JWT_SECRET: ${JWT_SECRET:-local-dev-only-not-a-real-secret}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+    ports:
+      - "127.0.0.1:5001:5000"
+
+volumes:
+  db-data:

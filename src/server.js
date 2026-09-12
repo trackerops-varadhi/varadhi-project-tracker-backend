@@ -7,9 +7,21 @@ const morgan = require('morgan')
 const { fork } = require('child_process')
 const db = require('./config/db')
 const { requireCsrfHeader } = require('./middleware/csrf.middleware')
+const { requestId } = require('./middleware/request-id.middleware')
+const { logger, install: installLogger } = require('./platform/logger')
+const metrics = require('./platform/metrics')
+const errorTracking = require('./platform/error-tracking')
+const leader = require('./platform/leader')
+const rateLimitStore = require('./middleware/rate-limit-store')
 const userTokensMigrationPath = require.resolve('./config/migrate-user-tokens')
 const sessionsMigrationPath = require.resolve('./config/migrate-sessions')
 // const path = require('path')
+
+// Before anything can log. In pretty mode this is a no-op and the terminal
+// looks exactly as it did; in json mode it routes the existing 257 console.*
+// call sites through the structured logger with correlation ids attached.
+installLogger()
+errorTracking.installProcessHandlers()
 
 const app = express()
 
@@ -86,12 +98,31 @@ const statusColor = (status) => {
 // `req.originalUrl` keeps the querystring and the full mount path, so a request
 // routed through `app.use('/api/notifications', ...)` still logs as
 // `/api/notifications?limit=10` rather than the router-relative `/`.
+// FIRST middleware that matters: everything logged after this carries a
+// correlation id, and the response echoes it back so a user can quote the id
+// off a failed request and it can be found in the logs.
+app.use(requestId)
+
 morgan.token('clean-url', (req) => req.originalUrl || req.url)
+morgan.token('req-id', (req) => req.id || '-')
 
 app.use(morgan((tokens, req, res) => {
   // Status is undefined when the client aborts before a response is written.
   const status = Number(tokens.status(req, res))
   const time = tokens['response-time'](req, res)
+
+  // In json mode the request line is a structured event, not a formatted
+  // string — returning null tells morgan to emit nothing and lets the logger
+  // own the output.
+  if (logger.settings().format === 'json') {
+    logger.info('http_request', {
+      method: tokens.method(req, res),
+      url: tokens['clean-url'](req, res),
+      status: Number.isNaN(status) ? null : status,
+      durationMs: time == null ? null : Math.round(Number(time)),
+    })
+    return null
+  }
 
   return [
     paint(1, tokens.method(req, res)),
@@ -174,6 +205,15 @@ app.get('/health', (req, res) => {
 // search_path. 200 ready / 503 not ready. See platform/readiness.js.
 app.get('/health/ready', require('./platform/readiness').handler)
 
+// Prometheus exposition. 404s unless METRICS_ENABLED=true, so operational shape
+// is never exposed by default. Recording happens regardless — the numbers cost
+// a Map increment and are worth already having the moment someone enables it.
+app.get('/metrics', metrics.handler)
+
+// Counts and times every request by ROUTE PATTERN, not URL — a metric labelled
+// with task ids is how a metrics backend falls over.
+app.use(metrics.httpMiddleware)
+
 // â”€â”€â”€ API Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Cookie transport diagnostics. 404s unless ENABLE_DIAGNOSTICS=true; remove the
 // env var once production login is confirmed working.
@@ -206,13 +246,17 @@ for (const mod of MODULES) {
 // â”€â”€â”€ Error Handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const { errorHandler, notFound } = require('./middleware/error.middleware')
 app.use(notFound)
+// Reports and re-throws. It deliberately does not shape the response —
+// errorHandler already owns that, and two handlers disagreeing about the
+// envelope is worse than either.
+app.use(errorTracking.middleware)
 app.use(errorHandler)
 
 // â”€â”€â”€ Start Server â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const PORT = process.env.PORT || 5000
 const bootStartedAt = Date.now()
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   const env = process.env.NODE_ENV || 'development'
 
   // Startup banner mirroring the Next.js dev server's shape, so both terminals
@@ -232,6 +276,28 @@ app.listen(PORT, () => {
   // swallows the "scheduled"/"subscribed" confirmations. Anything unexpected
   // still prints, and console.warn/console.error are never touched, so cron
   // failures and later sweep output stay fully visible.
+  // Rate-limit store: verified BEFORE traffic, so "the shared table was never
+  // migrated" is a refusal to boot rather than a 500 on somebody's login. It
+  // also refuses memory-store-plus-MULTI_INSTANCE outright, which is the
+  // misconfiguration that silently multiplies every quota by the instance count.
+  try {
+    await rateLimitStore.verify()
+  } catch (err) {
+    console.error(`
+RATE LIMIT STORE UNUSABLE
+  ${err.message}
+`)
+    process.exit(1)
+  }
+
+  // Leadership, only if cron is on at all — no point holding a connection open
+  // to win a race nobody is running.
+  let cronLeader = false
+  if (process.env.ENABLE_CRON !== 'false') {
+    cronLeader = await leader.acquire()
+    if (cronLeader) leader.installExitHandlers()
+  }
+
   const bootLog = console.log
   const registered = []
   console.log = (...args) => {
@@ -245,7 +311,19 @@ app.listen(PORT, () => {
   }
 
   try {
-    if (process.env.ENABLE_CRON !== 'false') {
+    // TWO gates, in this order.
+    //
+    // ENABLE_CRON is the operator's switch and still wins first — nothing below
+    // can start a sweep while it is false.
+    //
+    // Leadership is the second gate, and it is what makes a second instance
+    // safe. Every sweep here used to start unconditionally, so N instances ran
+    // each sweep N times: N reminder emails for one overdue task, N SLA
+    // escalations, N snooze wake-ups racing on the same rows. `cronLeader` is
+    // false unless this process holds the advisory lock, and it fails closed —
+    // any uncertainty (lock held elsewhere, connection refused, query error)
+    // means no cron here.
+    if (process.env.ENABLE_CRON !== 'false' && cronLeader) {
     // Module 8: Bugs Finder SLA sweep â€” flags at-risk and breached defects
     // against the server clock every 5 minutes.
     // Jobs owned by a migrated module. The module says what its jobs are; the
@@ -274,6 +352,17 @@ app.listen(PORT, () => {
     `   - Jobs:     ${unique.length ? `${unique.length} active` : 'disabled'}` +
     (unique.length ? paint(2, ` (${unique.join(', ')})`) : '')
   )
+  // Say plainly whether this instance is the one running sweeps. With more than
+  // one instance, "why did the reminder not send?" is answered by this line.
+  if (process.env.ENABLE_CRON === 'false') {
+    console.log(`   - Cron:     ${paint(2, 'disabled (ENABLE_CRON=false)')}`)
+  } else {
+    console.log(`   - Cron:     ${cronLeader
+      ? paint(32, 'leader') + paint(2, ` (advisory lock ${leader.CRON_LOCK_ID})`)
+      : paint(33, 'standby') + paint(2, ` (${leader.status().reason || 'not leader'})`)}`)
+  }
+  console.log(`   - Limits:   ${paint(2, `${rateLimitStore.configured()} store`
+    + (rateLimitStore.isMultiInstance() ? ', multi-instance' : ''))}`)
   console.log(paint(32, '   âœ“ Ready') + paint(2, ` in ${Date.now() - bootStartedAt}ms`))
   console.log('')
 })

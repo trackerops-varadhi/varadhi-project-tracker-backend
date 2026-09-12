@@ -1,0 +1,140 @@
+# Backend CI
+# -----------------------------------------------------------------------------
+# install -> lint -> boundaries -> migration system -> offline tests
+#
+# WHAT RUNS HERE AND WHAT CANNOT
+# The suites that need a live API on :5000 and a seeded database (bugs, teams,
+# calendar, sessions, security, sibling-sync, ops) are NOT run in CI, and that is
+# a deliberate limitation rather than an oversight: they authenticate as real
+# seeded users and assert against real fixture data, so running them needs a
+# provisioned database and a booted server, not just a Postgres service. What CI
+# does cover is everything that can be proven without that — the migration
+# system end to end against a throwaway Postgres, module boundaries, lint, and
+# the offline unit suites. See the `not-covered-here` step, which prints the gap
+# rather than letting a green tick imply more than it means.
+#
+# NO SECRETS. No repository secret is referenced. The only database is the
+# ephemeral `postgres` service container below, on loopback inside the runner.
+# Production and dev Supabase are never contacted; the migration runner refuses
+# a production project ref even if one were somehow present.
+
+name: backend-ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A new push supersedes an in-flight run on the same ref.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_ENV: test
+  LOG_FORMAT: json
+  # Throwaway, matches the service container. Loopback only.
+  SCRATCH_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/varadhi_ci
+  DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/varadhi_ci
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: varadhi_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # Fails loudly and early if the environment this workflow depends on is
+      # not what it expects — a missing DATABASE_URL should not surface as a
+      # confusing connection error thirty lines into a test run.
+      - name: Check required environment
+        run: |
+          set -euo pipefail
+          missing=0
+          for var in DATABASE_URL SCRATCH_DATABASE_URL; do
+            if [ -z "${!var:-}" ]; then
+              echo "::error::Required environment variable $var is not set"
+              missing=1
+            fi
+          done
+          # Values are never echoed. Only the host is printed, and only to prove
+          # the target is loopback.
+          host=$(printf '%s' "$DATABASE_URL" | sed -E 's#.*@([^:/?]+).*#\1#')
+          echo "database host: $host"
+          case "$host" in
+            127.0.0.1|localhost|::1) ;;
+            *) echo "::error::CI must target a loopback database, got '$host'"; missing=1 ;;
+          esac
+          [ "$missing" -eq 0 ] || exit 1
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Module boundaries
+        run: node scripts/check-boundaries.js
+
+      - name: Syntax check every source file
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r f; do
+            node --check "$f" || { echo "::error file=$f::syntax error"; fail=1; }
+          done < <(find src scripts migrations -name '*.js' -type f)
+          exit $fail
+
+      - name: Migration system
+        run: npm run test:migrate-system
+
+      - name: Offline suites
+        run: |
+          set -euo pipefail
+          npm run test:crypto
+          npm run test:ops-infra
+
+      - name: Docker image builds
+        run: docker build --target runtime -t varadhi-backend:ci .
+
+      - name: Image carries no .env
+        run: |
+          set -euo pipefail
+          # A secret in a layer survives deletion from the final filesystem, so
+          # assert on the layer contents, not just the running container.
+          if docker run --rm --entrypoint sh varadhi-backend:ci -c 'ls -a /app | grep -E "^\.env" || true' | grep -q .; then
+            echo "::error::.env file present in the image"
+            exit 1
+          fi
+          echo "no .env in image"
+
+      - name: What this workflow does NOT cover
+        if: always()
+        run: |
+          echo "Not run here (needs a booted API on :5000 and a seeded database):"
+          echo "  test:bugs test:teams test:calendar test:sessions"
+          echo "  test:security test:sibling-sync test:concurrency"
+          echo "  test:migration test:push-retry test:ops"
+          echo "Run those locally against dev before merging."

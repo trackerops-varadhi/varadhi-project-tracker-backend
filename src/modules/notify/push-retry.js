@@ -118,7 +118,9 @@ async function enqueueRetry({
 async function runPushRetriesNow(deps = {}) {
   // Injectable for tests; defaults to the real sender.
   const send = deps.send || defaultSend
-  const now = deps.now || (() => new Date())
+  // Reserved injection seam; the sweep currently takes its clock from
+  // Postgres (now()) rather than JS, so nothing reads this yet.
+  const _now = deps.now || (() => new Date())
 
   const result = { claimed: 0, sent: 0, retried: 0, exhausted: 0, dropped: 0 }
 

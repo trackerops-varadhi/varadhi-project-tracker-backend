@@ -54,19 +54,6 @@ const get = (path) => new Promise((resolve, reject) => {
 
 const created = { tasks: [], projects: [], prefs: [] }
 
-/**
- * A date `offsetDays` from today in the cron's timezone, as YYYY-MM-DD.
- * Computed in Postgres rather than JS on purpose: the sweeps compare
- * `(due_date AT TIME ZONE $tz)::date`, and building the expected date in a
- * different frame is exactly the bug these tests exist to catch.
- */
-const dateInDays = async (offsetDays) => {
-  const { rows } = await work.query(
-    `SELECT ((NOW() AT TIME ZONE $1)::date + ($2 || ' days')::interval)::date AS d`,
-    [TZ, String(offsetDays)])
-  return rows[0].d
-}
-
 async function main() {
   /* ════════════════════════════════════════════════════ READINESS ════════ */
   console.log('\n1. Readiness endpoint — healthy path')
@@ -163,7 +150,6 @@ async function main() {
   check('six fixture tasks created', created.tasks.length === 6, String(created.tasks.length))
 
   console.log('\n6. work answers the date questions the sweeps ask')
-  const due1 = await work.query('SELECT 1')  // keep the pool warm; result unused
   const workModule = require('../src/modules/work')
 
   const dueTomorrow = await workModule.findTasksDueInDays(1, TZ)

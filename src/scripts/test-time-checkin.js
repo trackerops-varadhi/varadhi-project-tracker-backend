@@ -32,7 +32,7 @@ async function run() {
     console.log('Check-in response:', inJson.message || JSON.stringify(inJson))
 
     // Wait 1 second and check-out
-    await new Promise(r => setTimeout(r, 1000))
+    await new Promise(r => { setTimeout(r, 1000) })
     const checkOutTime = new Date().toISOString()
     const outRes = await fetch('http://localhost:5000/api/time-management/check-out', {
       method: 'POST',

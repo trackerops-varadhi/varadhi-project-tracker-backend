@@ -1,0 +1,30 @@
+# Secrets — the whole family, never a layer.
+# A secret baked into an image layer survives deletion from the final
+# filesystem and travels with every copy of the image.
+.env
+.env.*
+!.env.example
+
+node_modules
+npm-debug.log*
+
+.git
+.gitignore
+.github
+
+# Local-only artifacts
+*.sql
+schema-split-rollback.sql
+coverage
+.nyc_output
+*.log
+
+# Editor / OS noise
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+Dockerfile
+docker-compose.yml
+.dockerignore

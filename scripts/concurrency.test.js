@@ -73,7 +73,7 @@ async function main() {
   {
     const base = await fresh()
     // Someone else changes it first.
-    await new Promise((r) => setTimeout(r, 15))
+    await new Promise((r) => { setTimeout(r, 15) })
     await work.query(`UPDATE tasks SET status='completed', updated_at=NOW() WHERE id=$1`, [taskId])
 
     const r = await fetch(`${API}/tasks/${taskId}/status`, {
@@ -96,7 +96,7 @@ async function main() {
   console.log('\n4. Concurrent TASK EDIT conflict (PUT)')
   {
     const base = await fresh()
-    await new Promise((r) => setTimeout(r, 15))
+    await new Promise((r) => { setTimeout(r, 15) })
     await work.query(`UPDATE tasks SET priority='critical', updated_at=NOW() WHERE id=$1`, [taskId])
 
     const r = await fetch(`${API}/tasks/${taskId}`, {
@@ -116,7 +116,7 @@ async function main() {
   console.log('\n5. Keep Mine — re-basing on currentUpdatedAt succeeds')
   {
     const base = await fresh()
-    await new Promise((r) => setTimeout(r, 15))
+    await new Promise((r) => { setTimeout(r, 15) })
     await work.query(`UPDATE tasks SET status='in_progress', updated_at=NOW() WHERE id=$1`, [taskId])
 
     const conflict = await (await fetch(`${API}/tasks/${taskId}/status`, {

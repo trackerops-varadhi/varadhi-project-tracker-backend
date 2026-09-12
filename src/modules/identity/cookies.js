@@ -73,7 +73,10 @@ const REFRESH_COOKIE_PATH = '/'
 // keep a stale refresh cookie alive at a path the current code never touches.
 const LEGACY_REFRESH_COOKIE_PATHS = ['/api/auth']
 
-const ACCESS_TOKEN_MS = 15 * 60 * 1000
+// Documents the access-token lifetime alongside the refresh one. The cookie
+// Max-Age deliberately OUTLIVES this (see sessions.test.js §9), so nothing
+// reads it directly — it is here so the two numbers sit together.
+const _ACCESS_TOKEN_MS = 15 * 60 * 1000
 const REFRESH_TOKEN_MS = 7 * 24 * 60 * 60 * 1000
 
 /*

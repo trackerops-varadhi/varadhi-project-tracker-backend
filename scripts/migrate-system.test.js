@@ -14,8 +14,9 @@
  * Not "does node-pg-migrate work" — that is its own project's problem. These
  * cover the things THIS system gets to be wrong about:
  *
- *   - the baseline reproduces the post-split schema exactly (29 tables, 21
- *     within-module FKs, 15 cascades, the sequence in defects)
+ *   - the baseline reproduces the post-split schema exactly — table count is
+ *     DERIVED from the migration files rather than hardcoded, plus 21
+ *     within-module FKs, 15 cascades and the sequence in defects
  *   - no migration re-creates a cross-module foreign key, which is the whole
  *     point of the split and the easiest thing to undo by accident
  *   - no migration creates a shadow table in public, the failure split-guard.js
@@ -119,6 +120,37 @@ const ledgerRows = async (mod) => {
 const reset = () => pool.query(
   `DROP SCHEMA IF EXISTS ${MODULES.join(', ')} CASCADE`)
 
+/*
+ * Expectations are DERIVED from the migration directory, never hardcoded.
+ *
+ * The first version of this suite asserted "7 migrations, 29 tables". Adding one
+ * ordinary migration (identity/0002) broke eleven assertions that were all
+ * describing the old world correctly — a test that has to be edited every time
+ * the thing it guards changes legitimately is a test people start ignoring.
+ */
+const migrationsOf = (mod) => {
+  const d = path.join(MIGRATIONS, mod)
+  return fs.existsSync(d) ? fs.readdirSync(d).filter((f) => /^\d+.*\.js$/.test(f)).sort() : []
+}
+const expectedMigrations = () =>
+  MODULES.reduce((n, m) => n + migrationsOf(m).length, 0)
+
+/** Tables the migration files themselves claim to create. */
+const expectedTables = () => {
+  let n = 0
+  for (const mod of MODULES) {
+    for (const f of migrationsOf(mod)) {
+      const src = fs.readFileSync(path.join(MIGRATIONS, mod, f), 'utf8')
+      // Anchored to the start of a line so the phrase "pgm.createTable(...)"
+      // inside each baseline's explanatory comment is not counted as a table —
+      // it was, and inflated the expectation by exactly seven.
+      n += (src.match(/^CREATE TABLE /gm) || []).length
+      n += (src.match(/^\s*pgm\.createTable\(/gm) || []).length
+    }
+  }
+  return n
+}
+
 /* ── Tests ────────────────────────────────────────────────────────────────── */
 
 async function main() {
@@ -131,14 +163,22 @@ async function main() {
 
   const up = runner(['up'])
   check('runner exited 0', up.ok, up.out.slice(-200))
-  check('reports 7 migrations applied', /7 migration\(s\) applied/.test(up.out),
-    up.out.slice(-160))
+  const EXPECTED_MIGRATIONS = expectedMigrations()
+  check(`reports ${EXPECTED_MIGRATIONS} migrations applied`,
+    up.out.includes(`${EXPECTED_MIGRATIONS} migration(s) applied`),
+    up.out.slice(-200))
   // Order is fixed so logs and failures are reproducible.
-  const order = MODULES.filter((m) => up.out.includes(`${m.padEnd(13)} up 1`))
+  // `up N:` — a module with more than one pending migration applies them all,
+  // so this must not assume 1. Built with the RegExp constructor and explicit
+  // double backslashes: a template literal eats `\s` and `\d`.
+  const order = MODULES.filter((m) => new RegExp(`${m}\\s+up \\d+:`).test(up.out))
   check('all 7 modules applied', order.length === 7, order.join(','))
   check('applied in the declared order', order.join(',') === MODULES.join(','), order.join(','))
 
-  check('29 module tables created', await tableCount() === 29, String(await tableCount()))
+  const EXPECTED_TABLES = expectedTables()
+  check(`${EXPECTED_TABLES} module tables created (derived from the migration files)`,
+    await tableCount() === EXPECTED_TABLES,
+    `${await tableCount()} vs ${EXPECTED_TABLES}`)
   check('21 within-module foreign keys', await withinFks() === 21, String(await withinFks()))
   check('15 cascades preserved', await cascades() === 15, String(await cascades()))
   check('bug_number_seq lives in defects',
@@ -157,8 +197,9 @@ async function main() {
   /* 3. ledger */
   console.log('\n3. Per-module ledger')
   for (const m of MODULES) {
-    check(`${m.padEnd(13)} ledger has exactly 1 row`, await ledgerRows(m) === 1,
-      String(await ledgerRows(m)))
+    const want = migrationsOf(m).length
+    check(`${m.padEnd(13)} ledger has ${want} row(s)`, await ledgerRows(m) === want,
+      `${await ledgerRows(m)} vs ${want}`)
   }
   const st = runner(['status'])
   check('status reports 0 pending', /0 pending migration\(s\)/.test(st.out), st.out.slice(-120))
@@ -177,10 +218,14 @@ async function main() {
 
   /* 5. down / rollback */
   console.log('\n5. Rollback')
-  const down = runner(['down'])
+  // --count higher than any module has, so every migration is reversed and the
+  // database returns to empty. The default (1 per module) would leave a module
+  // with two migrations holding its baseline.
+  const down = runner(['down', '--count', '99'])
   check('down exits 0', down.ok, down.out.slice(-200))
-  check('reports 7 rolled back', /7 migration\(s\) rolled back/.test(down.out),
-    down.out.slice(-160))
+  check(`reports ${EXPECTED_MIGRATIONS} rolled back`,
+    down.out.includes(`${EXPECTED_MIGRATIONS} migration(s) rolled back`),
+    down.out.slice(-200))
   check('all module tables gone', await tableCount() === 0, String(await tableCount()))
   // The bug the first implementation had: DROP SCHEMA CASCADE took the ledger
   // with it, and node-pg-migrate then failed deleting its own row.
@@ -189,7 +234,7 @@ async function main() {
   check('ledgers SURVIVE the rollback', ledgersLeft === 7,
     `${ledgersLeft} — down must not drop the schema holding its own history`)
   for (const m of MODULES) {
-    check(`${m.padEnd(13)} ledger row removed`, await ledgerRows(m) === 0,
+    check(`${m.padEnd(13)} ledger emptied`, await ledgerRows(m) === 0,
       String(await ledgerRows(m)))
   }
 
@@ -197,7 +242,8 @@ async function main() {
   console.log('\n6. Round trip — up after down')
   const reUp = runner(['up'])
   check('re-up exits 0', reUp.ok, reUp.out.slice(-160))
-  check('29 tables again', await tableCount() === 29, String(await tableCount()))
+  check(`${EXPECTED_TABLES} tables again`, await tableCount() === EXPECTED_TABLES,
+    String(await tableCount()))
   check('still zero cross-module FKs', await crossModuleFks() === 0)
   check('still 21 within-module FKs', await withinFks() === 21, String(await withinFks()))
 
@@ -229,8 +275,10 @@ async function main() {
         `${survived} — singleTransaction must roll the whole module back`)
       check('table count unchanged', await tableCount() === filesBefore,
         `${filesBefore} -> ${await tableCount()}`)
-      check('no ledger row for the failed migration', await ledgerRows('files') === 1,
-        `${await ledgerRows('files')} — a failed migration must not be recorded as applied`)
+      const wantFiles = migrationsOf('files').filter((f) => !/deliberate_failure/.test(f)).length
+      check('no ledger row for the failed migration',
+        await ledgerRows('files') === wantFiles,
+        `${await ledgerRows('files')} vs ${wantFiles} — a failure must not be recorded as applied`)
     } finally {
       fs.unlinkSync(bad)
     }
@@ -255,13 +303,23 @@ async function main() {
     check('it did NOT create the 29 tables', await tableCount() === handmade,
       `${handmade} -> ${await tableCount()} — baseline must not execute the body`)
     for (const m of MODULES) {
-      check(`${m.padEnd(13)} marked applied`, await ledgerRows(m) === 1, String(await ledgerRows(m)))
+      // baseline marks ONLY the first migration, whatever else the module has.
+      check(`${m.padEnd(13)} marked applied (0001 only)`, await ledgerRows(m) === 1,
+        String(await ledgerRows(m)))
     }
     const after = runner(['up'])
-    check('a later up then has nothing to do', /0 migration\(s\) applied/.test(after.out),
-      after.out.slice(-140))
-    check('and still did not create the tables', await tableCount() === handmade,
-      `${handmade} -> ${await tableCount()}`)
+    // The baseline marks ONLY 0001. Anything after it is a real pending
+    // migration and MUST still apply — that is the entire point of baselining:
+    // an existing database skips the provisioning step and then keeps up with
+    // everything since. So a later `up` is not a no-op unless 0001 is all there
+    // is.
+    const pendingAfterBaseline = expectedMigrations() - MODULES.length
+    check(`a later up applies the ${pendingAfterBaseline} non-baseline migration(s)`,
+      after.out.includes(`${pendingAfterBaseline} migration(s) applied`),
+      after.out.slice(-200))
+    check('it did NOT re-provision the baseline tables',
+      await tableCount() === handmade + pendingAfterBaseline,
+      `${handmade} -> ${await tableCount()}, expected +${pendingAfterBaseline}`)
 
     // Baseline must refuse to paper over an existing history.
     const b2 = runner(['baseline'])
@@ -302,7 +360,8 @@ async function main() {
   await reset()
   const final = runner(['up'])
   check('final up succeeds', final.ok, final.out.slice(-160))
-  check('29 tables', await tableCount() === 29, String(await tableCount()))
+  check(`${expectedTables()} tables`, await tableCount() === expectedTables(),
+    String(await tableCount()))
   check('0 cross-module FKs', await crossModuleFks() === 0)
 }
 

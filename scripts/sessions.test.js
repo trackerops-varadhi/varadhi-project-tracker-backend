@@ -189,7 +189,7 @@ const liveSessions = async () => {
   ok('replay inside grace window does not kill the session', raced.status === 200, `got ${raced.status}`)
 
   console.log('  (waiting out the 15s grace window...)')
-  await new Promise((r) => setTimeout(r, 16000))
+  await new Promise((r) => { setTimeout(r, 16000) })
   const replay = await call(makeJar(), 'post', '/auth/refresh', null,
     { cookieOverride: stolen, noJar: true })
   ok('replay OUTSIDE grace window rejected', replay.status === 401, `got ${replay.status}`)
