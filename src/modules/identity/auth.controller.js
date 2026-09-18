@@ -26,6 +26,7 @@ const { startSession, rotateRefreshToken, TokenError } = require('./token.servic
 const { revokeSession, revokeAllUserSessions, REVOKE_REASONS } = require('./session.service')
 const { ACCESS_COOKIE, REFRESH_COOKIE, setAuthCookies, clearAuthCookies } = require('./cookies')
 const { successResponse, errorResponse } = require('../../shared/response')
+const { sendResetEmail } = require('../../utils/sendEmail')
 
 exports.register = async (req, res) => {
   try {
@@ -210,23 +211,36 @@ exports.logout = async (req, res) => {
   return successResponse(res, null, 'Logged out successfully.')
 }
 
+const GENERIC_REPLY = 'If that email exists, a reset link has been sent.'
+
 exports.forgotPassword = async (req, res) => {
   try {
     const { email } = req.body
     if (!email) return errorResponse(res, 'Email is required.')
 
     // Same response whether or not the address exists — otherwise this endpoint
-    // is an account-enumeration oracle.
+    // is an account-enumeration oracle. That includes the message text itself,
+    // so both branches below return GENERIC_REPLY verbatim.
     if (!(await repo.findByEmail(email))) {
-      return successResponse(res, null, 'If that email exists, a reset link has been sent.')
+      return successResponse(res, null, GENERIC_REPLY)
     }
 
     const token = crypto.randomBytes(32).toString('hex')
     const expires = new Date(Date.now() + 3600000) // 1 hour
     await repo.setResetToken(email, token, expires)
 
-    // TODO: Send email with reset link
-    return successResponse(res, null, 'Password reset link sent to your email.')
+    const appUrl = process.env.FRONTEND_URL || 'http://localhost:3000'
+
+    // A dead SMTP box must not surface as a 500. The token is already stored,
+    // so the failure is "we could not deliver", not "the reset did not happen" —
+    // and reporting it differently would re-open the enumeration hole above.
+    try {
+      await sendResetEmail(email, `${appUrl}/auth/reset-password?token=${token}`)
+    } catch (mailErr) {
+      console.error('[auth] reset email failed:', mailErr.message)
+    }
+
+    return successResponse(res, null, GENERIC_REPLY)
   } catch (err) {
     return errorResponse(res, err.message, 500)
   }

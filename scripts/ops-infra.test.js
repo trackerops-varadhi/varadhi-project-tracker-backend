@@ -529,6 +529,102 @@ async function main() {
       /does NOT cover/.test(ci),
       'a green tick must not imply more coverage than it has')
   }
+
+  /* ═══════════════════════════════════ 9. CONTAINER-LOCAL DB GUARD ══════════ */
+  console.log('\n9. Migration target guard — container-local databases')
+  {
+    /*
+     * The compose Postgres is reached as `db`, which is neither loopback nor a
+     * Supabase project ref. Before this branch existed the runner refused it
+     * under EVERY flag combination — correct for a cloud database, wrong for a
+     * throwaway container, and it made `docker compose up` impossible to
+     * bootstrap.
+     *
+     * The branch opens on two independent conditions. These assertions exist to
+     * prove it did not become one: a bare hostname alone must never be enough,
+     * because a DNS search domain can resolve `db` to a real server.
+     *
+     * Driven through the runner as a child process — the way compose invokes
+     * it — rather than by calling the guard directly, so the npm script, the
+     * argv parsing and the env all take part.
+     */
+    const RUNNER = path.join(BACKEND, 'src', 'config', 'migrate-runner.js')
+    const guard = (url, env = {}, args = ['up']) => {
+      const r = spawnSync(process.execPath, [RUNNER, ...args], {
+        cwd: BACKEND,
+        encoding: 'utf8',
+        timeout: 30000,
+        env: { ...process.env, DATABASE_URL: url, MIGRATE_ALLOW_CONTAINER_DB: '', ...env },
+      })
+      const out = `${r.stdout || ''}${r.stderr || ''}`
+      const refusal = (out.match(/REFUSING — [^\n]*/) || [null])[0]
+      return { refusal, passed: refusal === null, out }
+    }
+
+    const CONTAINER = 'postgresql://u:p@db:5432/varadhi_local'
+    const PROD = 'postgresql://postgres.ostmlxuzhprymlchmmak:p@aws-1-ap-south-1.pooler.supabase.com:5432/postgres'
+    const UNKNOWN = 'postgresql://postgres.zzzzzzzzzzzzzzzzzz:p@aws-1-ap-south-1.pooler.supabase.com:5432/postgres'
+    const DEV = 'postgresql://postgres.dbuiauuhajwwpisjevpk:p@aws-1-ap-south-1.pooler.supabase.com:5432/postgres'
+    const FQDN = 'postgresql://u:p@db.corp.example.com:5432/x'
+
+    // (a) accepted WITH the opt-in
+    const withOptIn = guard(CONTAINER, { MIGRATE_ALLOW_CONTAINER_DB: 'true' })
+    check('container host ACCEPTED with MIGRATE_ALLOW_CONTAINER_DB=true',
+      withOptIn.passed, withOptIn.refusal || '')
+
+    // (b) refused WITHOUT it — unset, empty and an explicit "false"
+    for (const [label, value] of [['unset', ''], ['false', 'false'], ['yes', 'yes']]) {
+      const r = guard(CONTAINER, { MIGRATE_ALLOW_CONTAINER_DB: value })
+      check(`container host REFUSED when the opt-in is ${label}`,
+        /container-local database without the opt-in/.test(r.refusal || ''),
+        r.refusal || 'it was ACCEPTED')
+    }
+    // --allow-remote must not be a way around the opt-in.
+    const viaRemote = guard(CONTAINER, {}, ['up', '--allow-remote'])
+    check('--allow-remote does NOT substitute for the opt-in',
+      /container-local database without the opt-in/.test(viaRemote.refusal || ''),
+      viaRemote.refusal || 'it was ACCEPTED')
+
+    // (c) hosted targets are untouched by the new branch
+    const prodPlain = guard(PROD, { MIGRATE_ALLOW_CONTAINER_DB: 'true' })
+    check('PRODUCTION still refused, opt-in set',
+      /THIS IS PRODUCTION/.test(prodPlain.refusal || ''), prodPlain.refusal || 'ACCEPTED')
+
+    const prodArmed = guard(PROD, { MIGRATE_ALLOW_CONTAINER_DB: 'true' }, ['up', '--allow-remote'])
+    check('PRODUCTION still refused with opt-in AND --allow-remote',
+      /THIS IS PRODUCTION/.test(prodArmed.refusal || ''), prodArmed.refusal || 'ACCEPTED')
+
+    const prodDown = guard(PROD, { MIGRATE_ALLOW_CONTAINER_DB: 'true' }, ['down'])
+    check('PRODUCTION still refused for down',
+      /THIS IS PRODUCTION/.test(prodDown.refusal || ''), prodDown.refusal || 'ACCEPTED')
+
+    const unknown = guard(UNKNOWN, { MIGRATE_ALLOW_CONTAINER_DB: 'true' }, ['up', '--allow-remote'])
+    check('unknown hosted ref still refused',
+      /UNRECOGNISED HOSTED DATABASE/.test(unknown.refusal || ''), unknown.refusal || 'ACCEPTED')
+
+    const devNoFlag = guard(DEV, { MIGRATE_ALLOW_CONTAINER_DB: 'true' })
+    check('hosted dev still needs --allow-remote',
+      /without --allow-remote/.test(devNoFlag.refusal || ''), devNoFlag.refusal || 'ACCEPTED')
+
+    // The opt-in is scoped to bare labels. A dotted host is a real host.
+    const fqdn = guard(FQDN, { MIGRATE_ALLOW_CONTAINER_DB: 'true' }, ['up', '--allow-remote'])
+    check('a DOTTED host is not container-local, opt-in or not',
+      /UNRECOGNISED HOSTED DATABASE/.test(fqdn.refusal || ''),
+      `${fqdn.refusal || 'ACCEPTED'} — the opt-in must not cover db.corp.example.com`)
+
+    // And compose actually supplies the two things the branch needs.
+    const compose = fs.readFileSync(path.join(BACKEND, 'docker-compose.yml'), 'utf8')
+    check('compose defines the one-shot migrate service',
+      /^\s{2}migrate:/m.test(compose))
+    check('migrate service sets MIGRATE_ALLOW_CONTAINER_DB=true',
+      /MIGRATE_ALLOW_CONTAINER_DB:\s*"true"/.test(compose))
+    check('migrate service overrides NODE_ENV to development',
+      /migrate:[\s\S]{0,600}?NODE_ENV:\s*development/.test(compose),
+      'the image bakes NODE_ENV=production, which turns SSL on against an ssl=off Postgres')
+    check('both backends wait for migrate to COMPLETE',
+      (compose.match(/condition:\s*service_completed_successfully/g) || []).length === 2,
+      'a "started" condition would race the migration and lose')
+  }
 }
 
 main()

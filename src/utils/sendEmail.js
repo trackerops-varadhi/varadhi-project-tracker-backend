@@ -58,4 +58,35 @@ const sendInviteEmail = async (toEmail, inviteLink) => {
 // console.log("MAIL SENT:", info)
 }
 
-module.exports = { sendInviteEmail }
+const sendResetEmail = async (toEmail, resetLink) => {
+  const mailOptions = {
+    from: `"Varadhi Club" <${process.env.EMAIL_USER}>`,
+    to: toEmail,
+    subject: 'Reset your Varadhi Tracker password',
+    html: `
+      <h2>Reset your password</h2>
+      <p>We received a request to reset the password for this account.</p>
+      <p>Click the button below to choose a new password:</p>
+        <a href="${resetLink}"
+     style="
+       display:inline-block;
+       padding:12px 24px;
+       background:#7c3aed;
+       color:white;
+       text-decoration:none;
+       border-radius:8px;
+       font-weight:bold;
+     ">
+     Reset Password
+  </a>
+      <p style="margin-top:24px;color:#64748b;font-size:13px;">
+        This link expires in 1 hour. If you didn't request a reset, you can
+        ignore this email &mdash; your password stays unchanged.
+      </p>
+    `
+  }
+
+  await transporter.sendMail(mailOptions)
+}
+
+module.exports = { sendInviteEmail, sendResetEmail }

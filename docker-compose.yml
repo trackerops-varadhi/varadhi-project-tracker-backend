@@ -40,6 +40,40 @@ services:
       timeout: 3s
       retries: 12
 
+  # One-shot. Runs to completion, then exits; both backends wait for it.
+  #
+  # WHY THIS EXISTS
+  # The db service comes up EMPTY. Without this, the backend starts against a
+  # database with no schemas: its boot migrations die on `relation "users" does
+  # not exist`, /health/ready returns 503 for 0-of-7 schemas, and every module
+  # query fails — while /health still returns 200, because liveness touches
+  # nothing. The stack looks up and is not.
+  #
+  # NODE_ENV=development is load-bearing, not boilerplate. The image bakes
+  # NODE_ENV=production, and migrate-runner's makePool() turns SSL on for
+  # production. This Postgres runs with ssl=off, so inheriting the image default
+  # fails the handshake before a single statement runs.
+  #
+  # MIGRATE_ALLOW_CONTAINER_DB is the explicit half of the runner's
+  # container-local guard: `db` having no dots is necessary but not sufficient,
+  # because a DNS search domain could resolve a bare label to a real server.
+  # Nothing but this file sets it.
+  migrate:
+    build:
+      context: .
+      target: runtime
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/varadhi_local
+      MIGRATE_ALLOW_CONTAINER_DB: "true"
+      LOG_FORMAT: json
+    command: ["npm", "run", "migrate"]
+    # A one-shot job must not be resurrected by the restart policy.
+    restart: "no"
+
   backend:
     build:
       context: .
@@ -47,6 +81,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # Not just "started" — the schemas must EXIST before the backend boots,
+      # or it races the migration and loses.
+      migrate:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: development
       PORT: 5000
@@ -57,9 +95,19 @@ services:
       ENABLE_CRON: ${ENABLE_CRON:-false}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       RATE_LIMIT_STORE: ${RATE_LIMIT_STORE:-memory}
-      # Placeholders only — supplied by the developer's shell, never committed.
-      # Empty is fine locally: the code degrades (no push, no email) rather than
-      # failing, which is what makes a local stack usable without credentials.
+      # Interpolated from the shell OR from backend/.env — compose reads that
+      # file for ${VAR} substitution automatically. Nothing is baked into the
+      # image (.dockerignore excludes .env), but the RUNNING container does
+      # receive whatever .env holds, and `docker compose config` prints those
+      # values in plaintext. Treat its output as sensitive.
+      #
+      # SUPABASE_URL IS NOT OPTIONAL, despite reading like it is.
+      # platform/supabase.js calls createClient() at module load and throws
+      # "supabaseUrl is required." when it is unset — the process then exits
+      # before serving anything. So a machine with no .env and no exported
+      # SUPABASE_URL cannot run this stack at all. That is a wart in
+      # supabase.js (an eagerly-constructed client with no guard), recorded
+      # here rather than worked around.
       JWT_SECRET: ${JWT_SECRET:-local-dev-only-not-a-real-secret}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       SUPABASE_URL: ${SUPABASE_URL:-}
@@ -80,6 +128,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # Doubly required here: this instance runs RATE_LIMIT_STORE=postgres, and
+      # without identity.rate_limit_buckets (migration 0002) the store's startup
+      # verify throws and the process exits 1 before serving anything.
+      migrate:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: development
       PORT: 5000
@@ -94,6 +147,14 @@ services:
       MULTI_INSTANCE: "true"
       JWT_SECRET: ${JWT_SECRET:-local-dev-only-not-a-real-secret}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      # Required, not optional — see the note on the backend service. Omitting
+      # these is what made this instance exit at startup with
+      # "supabaseUrl is required." while `backend` came up fine, because only
+      # `backend` had them.
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
     ports:
       - "127.0.0.1:5001:5000"
 

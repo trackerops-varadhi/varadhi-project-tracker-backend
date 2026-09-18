@@ -48,12 +48,17 @@
  * SAFETY
  *
  * `down` is destructive — rolling back a baseline drops every table that module
- * owns — so it is refused outright against any non-loopback database. `up` is
+ * owns — so it is refused against any database that is not demonstrably
+ * throwaway: loopback, or a container-local database that has opted in. `up` is
  * allowed against a remote target but requires --allow-remote, the same gesture
  * migrate-schema-split.js asks for, so a hosted migration is always something a
  * person typed rather than something a default did.
  *
- * Production is refused by project ref, with no flag that overrides it.
+ * A compose database (host `db`, no dots) is its own category: see the
+ * container-local branch in assertSafeTarget. It needs
+ * MIGRATE_ALLOW_CONTAINER_DB=true as well as the hostname shape.
+ *
+ * Production is refused by project ref, first, with no flag that overrides it.
  */
 
 require('dotenv').config()
@@ -77,6 +82,22 @@ const LEDGER_TABLE = 'pgmigrations'
 const DEV_REF = 'dbuiauuhajwwpisjevpk'
 const PROD_REF = 'ostmlxuzhprymlchmmak'
 
+/**
+ * A single-label hostname — `db`, `postgres`, `varadhi-db` — with no dots.
+ *
+ * Inside a container network that is a compose service name, resolvable only by
+ * the embedded DNS server on that network. It cannot be a public database,
+ * because a public database needs a fully-qualified name.
+ *
+ * "Cannot" is doing slightly too much work there, which is why recognising this
+ * shape is NOT on its own enough to permit a migration. On a corporate LAN with
+ * a DNS search domain, `db` can resolve to `db.corp.example.com` — a real
+ * server someone cares about. So the shape is necessary but not sufficient:
+ * MIGRATE_ALLOW_CONTAINER_DB must also be set, which only docker-compose.yml
+ * does. Two independent conditions, neither reachable by accident.
+ */
+const SINGLE_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i
+
 const resolveTarget = () => {
   const url = process.env.DATABASE_URL || ''
   const user = url.match(/^postgres(?:ql)?:\/\/([^:@]+)/)?.[1] || ''
@@ -85,8 +106,14 @@ const resolveTarget = () => {
     user.match(/^postgres\.([a-z0-9]{16,})$/)?.[1] ||
     host.match(/^db\.([a-z0-9]{16,})\.supabase\.co$/)?.[1] ||
     null
-  return { url, host, ref, loopback: ['127.0.0.1', 'localhost', '::1'].includes(host) }
+  const loopback = ['127.0.0.1', 'localhost', '::1'].includes(host)
+  // `localhost` is already loopback; excluding it here keeps the two categories
+  // disjoint so a log line saying "container-local" always means a container.
+  const containerLocal = !loopback && SINGLE_LABEL.test(host)
+  return { url, host, ref, loopback, containerLocal }
 }
+
+const containerDbAllowed = () => process.env.MIGRATE_ALLOW_CONTAINER_DB === 'true'
 
 const refuse = (lines) => {
   console.error(`\n${lines.join('\n')}\n`)
@@ -94,10 +121,11 @@ const refuse = (lines) => {
 }
 
 const assertSafeTarget = (direction, allowRemote) => {
-  const { url, host, ref, loopback } = resolveTarget()
+  const { url, host, ref, loopback, containerLocal } = resolveTarget()
 
   if (!url) refuse(['REFUSING — DATABASE_URL is not set.'])
 
+  // Unconditional, and deliberately FIRST so no later branch can reach past it.
   if (ref === PROD_REF) {
     refuse([
       'REFUSING — THIS IS PRODUCTION.',
@@ -109,6 +137,40 @@ const assertSafeTarget = (direction, allowRemote) => {
   }
 
   if (loopback) return
+
+  /*
+   * A database on the container network, e.g. `postgresql://…@db:5432/…`.
+   *
+   * WHY THIS BRANCH EXISTS
+   * Without it there is no way to migrate the docker-compose Postgres at all.
+   * The host `db` is not loopback, so the checks below treat it as a hosted
+   * database; --allow-remote then demands a recognised Supabase project ref,
+   * which a compose service name does not have. Every flag combination is
+   * refused, which is the correct answer for a cloud database and the wrong one
+   * for a throwaway container that lives and dies with `docker compose down -v`.
+   *
+   * WHY IT IS NOT A HOLE
+   * Two conditions, both required. The host must have no dots — a public
+   * database cannot be reached by a bare label — AND MIGRATE_ALLOW_CONTAINER_DB
+   * must be "true", which only docker-compose.yml sets. Neither is reachable by
+   * accident from a developer shell or CI, and the production check above has
+   * already run and cannot be bypassed from here.
+   *
+   * `down` is permitted, exactly as it is for loopback: a compose database is
+   * disposable by construction.
+   */
+  if (containerLocal && containerDbAllowed()) return
+
+  if (containerLocal) {
+    refuse([
+      'REFUSING — container-local database without the opt-in.',
+      `  target host : ${host}`,
+      `  "${host}" has no dots, so it looks like a compose service name rather than`,
+      '  a public host — but a DNS search domain could still resolve it to a real',
+      '  server. Set MIGRATE_ALLOW_CONTAINER_DB=true to confirm it is a throwaway',
+      '  container database. docker-compose.yml sets it for the migrate service.',
+    ])
+  }
 
   if (direction === 'down') {
     refuse([
