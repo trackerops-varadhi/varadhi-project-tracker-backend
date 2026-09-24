@@ -847,14 +847,28 @@ async function markSourceDirty(sourceType, sourceId) {
  */
 async function purgeSource(sourceType, sourceId, deps = {}) {
   if (!sourceType || !sourceId) return 0
+  return purgeSources(sourceType, [sourceId], deps)
+}
+
+/**
+ * purgeSource for many sources of one type in a single lookup.
+ *
+ * A deleted project takes all its tasks with it, and one query per task on the
+ * request path would scale with the size of the project. The per-link work —
+ * the provider call and the row delete — is unchanged, and it is only paid for
+ * links that exist.
+ */
+async function purgeSources(sourceType, sourceIds, deps = {}) {
+  const ids = [...new Set((sourceIds || []).filter(Boolean))]
+  if (!sourceType || ids.length === 0) return 0
 
   const { rows } = await pool.query(
     `SELECT l.*, c.provider, c.calendar_id, c.access_token, c.refresh_token,
             c.token_expires_at, c.user_id, c.id AS conn_id, c.status
        FROM calendar_event_links l
        JOIN calendar_connections c ON c.id = l.connection_id
-      WHERE l.source_type = $1 AND l.source_id = $2`,
-    [sourceType, sourceId]
+      WHERE l.source_type = $1 AND l.source_id = ANY($2::uuid[])`,
+    [sourceType, ids]
   )
 
   let removed = 0
@@ -912,5 +926,6 @@ module.exports = {
   collectSyncableItems,
   markSourceDirty,
   purgeSource,
+  purgeSources,
   DEFAULT_EVENT_DURATION_MINUTES,
 }

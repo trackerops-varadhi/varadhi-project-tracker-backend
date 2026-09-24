@@ -82,6 +82,20 @@ exports.findOpenCheckInForCheckout = async (userId, date, checkOut) => {
   return rows[0] || null
 }
 
+/**
+ * Remove every time log booked against a deleted project.
+ *
+ * time_logs.project_id was ON DELETE CASCADE to projects until the Phase 2
+ * schema split dropped the cross-schema key; this is that cascade, run from
+ * the project.deleted subscriber. Logs with no project are never matched.
+ *
+ * @returns {Promise<number>} rows removed
+ */
+exports.deleteTimeLogsForProject = async (projectId) => {
+  const { rowCount } = await pool.query('DELETE FROM time_logs WHERE project_id = $1', [projectId])
+  return rowCount
+}
+
 exports.closeCheckOut = async (id, { checkOut, hours, note }) => {
   const { rows } = await pool.query(
     `UPDATE time_logs

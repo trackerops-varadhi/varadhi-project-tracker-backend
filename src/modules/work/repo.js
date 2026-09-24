@@ -139,9 +139,45 @@ exports.archiveProject = async (id) => {
   return rows[0] || null
 }
 
+/**
+ * Delete a project and its tasks, and report which task ids went.
+ *
+ * The tasks would cascade on their own — work.tasks has an ON DELETE CASCADE to
+ * work.projects — but a cascade is silent, and the project.deleted event must
+ * name every task it took so other modules can drop what pointed at them. So
+ * the tasks are deleted explicitly with RETURNING, then the project.
+ * project_members and comments still cascade inside the schema.
+ *
+ * The project row is locked first. Inserting a task takes a KEY SHARE lock on
+ * its project to check the foreign key, which FOR UPDATE blocks — so a task
+ * created while this runs either commits before the lock (and is returned
+ * here) or fails its FK check after the commit. Without the lock it could land
+ * between the two DELETEs and be cascaded away without appearing in taskIds.
+ *
+ * @returns {Promise<{id: string, taskIds: string[]}|null>} null if not found
+ */
 exports.deleteProject = async (id) => {
-  const { rows } = await pool.query('DELETE FROM projects WHERE id=$1 RETURNING id', [id])
-  return rows[0] || null
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const locked = await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE', [id])
+    if (!locked.rows[0]) {
+      await client.query('ROLLBACK')
+      return null
+    }
+
+    const tasks = await client.query('DELETE FROM tasks WHERE project_id=$1 RETURNING id', [id])
+    await client.query('DELETE FROM projects WHERE id=$1', [id])
+
+    await client.query('COMMIT')
+    return { id, taskIds: tasks.rows.map((r) => r.id) }
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════ */

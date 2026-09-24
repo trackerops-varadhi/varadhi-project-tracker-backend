@@ -4,11 +4,20 @@
 
 const storage = require('./storage')
 const documentsRepo = require('./documents.repo')
+const workSubscriber = require('./work-subscriber')
 
 exports.mount = [
   { path: '/api/documents', router: require('./documents.routes') },
   { path: '/api/folders', router: require('./folders.routes') },
 ]
+
+/* ── Event subscriptions ────────────────────────────────────────────────── */
+//
+// Listens to work's project.deleted and clears documents' reference to the
+// project, keeping the documents — the ON DELETE SET NULL the schema split
+// dropped. Called by server.js outside the ENABLE_CRON switch. Idempotent.
+exports.subscribe = () => workSubscriber.startWorkSubscriptions()
+exports.unsubscribe = () => workSubscriber.stopWorkSubscriptions()
 
 /* ── Object storage ─────────────────────────────────────────────────────── */
 

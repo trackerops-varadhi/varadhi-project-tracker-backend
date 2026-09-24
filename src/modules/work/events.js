@@ -26,8 +26,9 @@ const { EventEmitter } = require('events')
 
 const emitter = new EventEmitter()
 
-// Node warns at 10 listeners. Integrations registers two; the ceiling is raised
-// a little so adding a subscriber later is not a surprise warning in the log.
+// Node warns at 10 listeners per event. PROJECT_DELETED has the most — one per
+// owning module concern, currently five — and the ceiling is raised so adding a
+// subscriber later is not a surprise warning in the log.
 emitter.setMaxListeners(25)
 
 const EVENTS = {
@@ -51,6 +52,36 @@ const EVENTS = {
    * thing the inversion must not quietly change.
    */
   TASK_DELETED: 'task.deleted',
+
+  /**
+   * A project, and every task in it, has been removed.
+   *
+   * Payload: `{ projectId, taskIds }`.
+   *
+   * WHAT THIS REPLACES
+   * Before the Phase 2 schema split, deleting a project was one statement and
+   * foreign keys did the rest: time_logs and teams_webhooks CASCADEd;
+   * documents.project_id, bugs.project_id and bugs.linked_task_id were SET
+   * NULL. Those keys crossed module schemas, so the split dropped them, and
+   * this event is what each owning module now listens to instead.
+   *
+   * ORDERING: emitted AFTER the delete has committed — the reverse of
+   * TASK_DELETED, and for the reverse reason. task.deleted's only consumer
+   * removes a calendar mirror, which the next sweep can recreate, so running it
+   * early is harmless. This event's consumers destroy tracker data: a project's
+   * time logs and its Teams webhooks. Running them before a delete that then
+   * failed would leave a live project with its time logs gone. Afterwards is the
+   * only point at which the project is known to be gone.
+   *
+   * WHY IT CARRIES taskIds
+   * work.tasks cascades from work.projects inside the database, and a cascade
+   * does not go through deleteTask, so TASK_DELETED is NOT emitted for a task
+   * that goes with its project. Once the row is gone, nothing but this payload
+   * records which ids went. A subscriber that reacts to deleted tasks must
+   * therefore handle both events — task.deleted for a single task, and this
+   * event's taskIds for tasks removed with their project.
+   */
+  PROJECT_DELETED: 'project.deleted',
 }
 
 /**

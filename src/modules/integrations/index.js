@@ -46,7 +46,10 @@ exports.jobs = [
  *   teams-fanout     listens to notify's emitter, so a notification reaches the
  *                    right Teams channel as it is dispatched.
  *   work-subscriber  listens to work's task events, so a deleted task's calendar
- *                    event is reaped before the row goes.
+ *                    event is reaped before the row goes, and to
+ *                    project.deleted, which removes the project's Teams
+ *                    webhooks and the calendar events of its milestone and
+ *                    of every task deleted with it.
  *
  * Turning the sweeps off must not silently stop either. startTeamsFanout was
  * already outside the cron switch in server.js for this reason; this formalises

@@ -84,3 +84,25 @@ exports.updateDocumentFolder = async (id, folderId) => {
 exports.deleteDocument = async (id) => {
   await pool.query('DELETE FROM documents WHERE id = $1', [id])
 }
+
+/**
+ * Detach every document from a deleted project, keeping the documents.
+ *
+ * documents.project_id was ON DELETE SET NULL until the Phase 2 schema split
+ * dropped the cross-schema key; this is that rule, run from the
+ * project.deleted subscriber. The files survive as unscoped documents — the
+ * same outcome as deleting a folder, which unfiles rather than loses.
+ *
+ * Keeping them matters beyond Documents: a bug attachment is mirrored here with
+ * its bug's project, and bug_attachments.document_id must still resolve after
+ * that project is gone.
+ *
+ * @returns {Promise<number>} rows detached
+ */
+exports.detachProject = async (projectId) => {
+  const { rowCount } = await pool.query(
+    'UPDATE documents SET project_id = NULL WHERE project_id = $1',
+    [projectId]
+  )
+  return rowCount
+}

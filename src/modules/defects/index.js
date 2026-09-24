@@ -4,10 +4,20 @@
 // The only file outside this directory that anything else may require.
 
 const slaCron = require('./sla-cron')
+const workSubscriber = require('./work-subscriber')
 
 exports.mount = [
   { path: '/api/bugs', router: require('./routes') },
 ]
+
+/* ── Event subscriptions ────────────────────────────────────────────────── */
+//
+// Listens to work's project.deleted and clears bugs' references to the project
+// and to the tasks deleted with it — the two ON DELETE SET NULL rules the
+// schema split dropped. Called by server.js outside the ENABLE_CRON switch.
+// Idempotent.
+exports.subscribe = () => workSubscriber.startWorkSubscriptions()
+exports.unsubscribe = () => workSubscriber.stopWorkSubscriptions()
 
 /* ── Background jobs ────────────────────────────────────────────────────── */
 //

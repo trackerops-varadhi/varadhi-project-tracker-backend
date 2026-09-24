@@ -5,8 +5,10 @@ const repo = require('./repo')
 const service = require('./projects.service')
 const notify = require('../notify')
 const { notifySafely, actorName } = require('./notifications')
+const events = require('./events')
 
 const { getProjectWithDetails, getNotificationContext } = service
+const { PROJECT_DELETED } = events.EVENTS
 
 exports.getAllProjects = async (req, res) => {
   try {
@@ -196,6 +198,15 @@ exports.deleteProject = async (req, res) => {
 
     const deleted = await repo.deleteProject(req.params.id)
     if (!deleted) return errorResponse(res, 'Project not found.', 404)
+
+    // Announced AFTER the delete has committed, and awaited. Time logs, Teams
+    // webhooks, calendar events, and document and bug references to this
+    // project or its tasks live in other modules' schemas, where no foreign key
+    // can reach them any more; each owning module cleans up its own rows. See
+    // events.js for why this runs after the delete when task.deleted runs
+    // before. emit() never throws, so a failed cleanup cannot turn a completed
+    // delete into a 500.
+    await events.emit(PROJECT_DELETED, { projectId: deleted.id, taskIds: deleted.taskIds })
 
     // Link to the list, not the dead id.
     await notifySafely(async () => {

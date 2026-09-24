@@ -168,6 +168,12 @@ exports.createTaskForBug = async ({
  * `events.on(events.EVENTS.TASK_CHANGED, handler)` — integrations subscribes
  * here so work no longer has to know the calendar exists. See events.js for
  * why task.deleted is awaited and emitted before the row goes.
+ *
+ * PROJECT_DELETED is how the rest of the system learns a project and its tasks
+ * are gone: integrations, workforce, files and defects each subscribe and drop
+ * or detach their own rows, which is what the cross-schema foreign keys did
+ * before the split. It fires after the delete, and carries the task ids,
+ * because the tasks' own cascade emits nothing.
  */
 exports.events = {
   EVENTS: events.EVENTS,

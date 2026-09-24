@@ -293,6 +293,36 @@ exports.deleteBug = async (id) => {
   await pool.query('DELETE FROM bugs WHERE id = $1', [id])
 }
 
+/**
+ * Clear bugs' references to a deleted project and to the tasks deleted with it.
+ *
+ * bugs.project_id and bugs.linked_task_id were both ON DELETE SET NULL until
+ * the Phase 2 schema split dropped the cross-schema keys; this is those two
+ * rules, run from the project.deleted subscriber. The bugs themselves are kept
+ * — a defect's history outlives the project it was filed against.
+ *
+ * The task clause is not limited to this project's bugs: a bug filed against
+ * project B may link a task in project A, and deleting A must clear that link
+ * too, exactly as the foreign key did.
+ *
+ * One statement, so both columns change atomically. Deliberately does not
+ * touch updated_at or write bug_activity_logs: a foreign key's SET NULL did
+ * neither, and this reproduces it rather than inventing a user-visible edit.
+ *
+ * @returns {Promise<number>} bugs changed
+ */
+exports.detachDeletedProject = async (projectId, taskIds = []) => {
+  const { rowCount } = await pool.query(
+    `UPDATE bugs
+        SET project_id     = CASE WHEN project_id = $1 THEN NULL ELSE project_id END,
+            linked_task_id = CASE WHEN linked_task_id = ANY($2::uuid[]) THEN NULL
+                                  ELSE linked_task_id END
+      WHERE project_id = $1 OR linked_task_id = ANY($2::uuid[])`,
+    [projectId, taskIds]
+  )
+  return rowCount
+}
+
 /* ── Comments ───────────────────────────────────────────────────────────── */
 
 exports.insertComment = async (bugId, authorId, content) => {

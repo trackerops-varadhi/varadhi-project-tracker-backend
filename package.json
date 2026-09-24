@@ -32,7 +32,8 @@
     "test:migrate-system": "node scripts/migrate-system.test.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test:ops-infra": "node scripts/ops-infra.test.js"
+    "test:ops-infra": "node scripts/ops-infra.test.js",
+    "test:project-deletion": "node scripts/project-deletion.test.js"
   },
   "engines": {
     "node": ">=18.0.0"
