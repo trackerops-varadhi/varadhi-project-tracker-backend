@@ -4,8 +4,6 @@ const cors = require('cors')
 const cookieParser = require('cookie-parser')
 const helmet = require('helmet')
 const morgan = require('morgan')
-const { fork } = require('child_process')
-const db = require('./config/db')
 const { requireCsrfHeader } = require('./middleware/csrf.middleware')
 const { requestId } = require('./middleware/request-id.middleware')
 const { logger, install: installLogger } = require('./platform/logger')
@@ -13,8 +11,6 @@ const metrics = require('./platform/metrics')
 const errorTracking = require('./platform/error-tracking')
 const leader = require('./platform/leader')
 const rateLimitStore = require('./middleware/rate-limit-store')
-const userTokensMigrationPath = require.resolve('./config/migrate-user-tokens')
-const sessionsMigrationPath = require.resolve('./config/migrate-sessions')
 // const path = require('path')
 
 // Before anything can log. In pretty mode this is a no-op and the terminal
@@ -149,40 +145,28 @@ app.use(cookieParser())
 // nothing and closes the hole at the parser rather than relying solely on the
 // header check below.
 app.use(requireCsrfHeader)
-// Forked rather than required so a migration's `process.exit()` cannot take the
-// API process down with it.
-const forkMigration = (label, migrationPath) =>
-  new Promise((resolve) => {
-    const migration = fork(migrationPath, [], { silent: true })
 
-    migration.stdout?.on('data', (chunk) => process.stdout.write(chunk))
-    migration.stderr?.on('data', (chunk) => process.stderr.write(chunk))
-
-    migration.on('error', (err) => {
-      console.error(`${label} migration failed:`, err.message)
-      resolve(false)
-    })
-
-    migration.on('exit', (code) => {
-      if (code !== 0) {
-        console.error(`${label} migration exited with code ${code}`)
-      }
-      resolve(code === 0)
-    })
-  })
-
-// SEQUENTIAL, not parallel: migrate-sessions backfills a session row for every
-// session_id already in user_tokens, so user_tokens has to exist first. Running
-// these concurrently would race on a cold database and leave the backfill empty.
-const runBootMigrations = async () => {
-  try {
-    await db.query('SELECT 1')
-    await forkMigration('user_tokens', userTokensMigrationPath)
-    await forkMigration('user_sessions', sessionsMigrationPath)
-  } catch (err) {
-    console.error('Boot migrations failed:', err.message)
-  }
-}
+// ─── Migrations are NOT run from here ────────────────────────────────────────
+//
+// This process used to fork migrate-user-tokens.js and migrate-sessions.js on
+// every boot. That was the second of two migration systems, and the weaker one:
+// it applied DDL outside any version ledger, re-ran on every restart, reported
+// failures only to the log, and — with N instances — raced itself.
+//
+// node-pg-migrate is now the single authority (migrations/<module>/, one ledger
+// per schema, see migrations/README.md). Schema changes are a deliberate step,
+// never a side effect of starting the API:
+//
+//   local / CI        npm run migrate
+//   docker compose    the one-shot `migrate` service, which both backends wait
+//                     on via service_completed_successfully
+//   production        still pre-split: apply migrate-schema-split.js, then
+//                     `npm run migrate:baseline`, before `npm run migrate` can
+//                     mean anything there. Deliberately manual — migrate-runner
+//                     refuses the production project ref outright.
+//
+// A database that has not been migrated now fails loudly at /health/ready
+// (0-of-7 schemas) instead of being silently patched at boot.
 
 // â”€â”€â”€ Static file serving (uploads) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // app.use('/uploads', express.static(path.join(__dirname, '../uploads')))
@@ -267,7 +251,6 @@ app.listen(PORT, async () => {
   console.log(`   - Local:    http://localhost:${PORT}`)
   console.log(`   - Health:   http://localhost:${PORT}/health`)
   console.log(`   - Env:      ${env}`)
-  runBootMigrations()
 
   // Each start*Cron/fanout announces itself with its own `[name] scheduled ...`
   // line â€” seven near-identical lines of boot noise. They are collapsed into a

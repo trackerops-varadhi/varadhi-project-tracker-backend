@@ -22,7 +22,7 @@
  * live database carries hand-applied drift, so a narrow additive script is safe
  * to run against production regardless of how it got to its current shape.
  *
- *   npm run db:migrate:push-retry
+ *   RETIRED — node src/config/migrate-push-retry.js (pre-split databases only)
  */
 require('dotenv').config()
 const pool = require('./db')

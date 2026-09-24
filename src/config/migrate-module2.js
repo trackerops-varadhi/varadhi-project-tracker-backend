@@ -28,7 +28,7 @@
  * so a full migrate.js run is not a reliable prerequisite. The same DDL is
  * mirrored into migrate.js as well, for databases created from scratch.
  *
- *   npm run db:migrate:module2
+ *   RETIRED — node src/config/migrate-module2.js (pre-split databases only)
  */
 
 require('dotenv').config()

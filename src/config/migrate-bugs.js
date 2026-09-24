@@ -20,7 +20,7 @@
  * ---------------------------------------------------------------------------
  * Run against an existing database:
  *
- *   npm run db:migrate:bugs
+ *   RETIRED — node src/config/migrate-bugs.js (pre-split databases only)
  *
  * The same statements are mirrored into migrate.js so a from-scratch database
  * matches a migrated one — that mirroring is the convention every previous

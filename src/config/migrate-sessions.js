@@ -3,7 +3,8 @@
  * ---------------------------------------------------------------------------
  * Run against an existing database:
  *
- *   npm run db:migrate:sessions
+ *   RETIRED as an npm script — node src/config/migrate-sessions.js.
+ *   The backfill is covered by scripts/migration-compat.test.js.
  *
  * The same statements are mirrored into migrate.js so a from-scratch database
  * matches a migrated one — the convention every previous module here follows

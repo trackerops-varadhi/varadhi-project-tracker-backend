@@ -32,7 +32,7 @@
  * scheduling. Calendar sync is entirely about instants in time across zones,
  * so getting this wrong would be considerably worse here.
  *
- *   npm run db:migrate:module45
+ *   RETIRED — node src/config/migrate-module45.js (pre-split databases only)
  */
 
 require('dotenv').config()

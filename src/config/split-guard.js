@@ -21,7 +21,8 @@
  *
  * WHAT THE CORRECT SEQUENCE IS
  *
- *   fresh database:      npm run db:migrate                       (this era)
+ *   fresh database:      npm run migrate                          (node-pg-migrate,
+ *                        which provisions the module schemas directly)
  *                        node src/config/migrate-schema-split.js --apply
  *
  *   already split:       neither. The schema is current; a module that needs a

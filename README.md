@@ -27,8 +27,11 @@ createdb varadhi_db
 ### 4. Run migrations
 
 ```bash
-npm run db:migrate
+npm run migrate
 ```
+
+node-pg-migrate is the only migration system: one directory per module under
+`migrations/`, one version ledger per schema. See `migrations/README.md`.
 
 ### 5. Seed with test data
 

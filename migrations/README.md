@@ -80,9 +80,15 @@ module whose ledger already has rows, so it cannot paper over real history.
 npm run migrate              # 7 schemas, 29 tables, 21 within-module FKs, 15 cascades
 ```
 
-That is the whole sequence. The legacy `npm run db:migrate` + `migrate-schema-split.js`
-path still exists and still works, but it produces the pre-split layout and then moves
-it; this produces the final layout directly.
+That is the whole sequence, and it is now the only one. The legacy `db:migrate*` npm
+scripts have been removed and the API no longer runs migrations at boot, so nothing
+applies DDL outside this ledger.
+
+The era scripts themselves remain in `src/config/` as guarded history — each refuses to
+run against a split database (`split-guard.js`) — and `migrate-schema-split.js` stays
+because production is still pre-split and that is the tool which moves it. The one
+exception to "nothing outside the ledger" is `migrate-sessions.js`, whose one-time
+backfill is still covered by `scripts/migration-compat.test.js`.
 
 ## Safety
 

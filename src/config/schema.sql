@@ -20,7 +20,7 @@
 -- ---------------------------------------------------------------------------
 -- To provision a database, run the migration instead:
 --
---     npm run db:migrate            # node src/config/migrate.js
+--     npm run migrate               # node-pg-migrate, migrations/<module>/
 --
 -- migrate.js is idempotent (every statement is CREATE TABLE / CREATE INDEX /
 -- ADD COLUMN "IF NOT EXISTS") and wrapped in a single BEGIN/COMMIT, so it is
