@@ -224,24 +224,52 @@ exports.findTaskIdsByProject = async (projectId) => {
 }
 
 // `projects` is joined (work owns it); the two `users` joins are gone.
-exports.findTaskRow = async (taskId) => {
+/**
+ * Task rows with their project name, for one or many ids, in one query.
+ *
+ * There is deliberately no single-id variant. The list endpoints used to call
+ * one per row — the N+1 the restructure was supposed to remove — and leaving a
+ * single-row function here is how that grows back. A caller wanting one task
+ * passes one id.
+ *
+ * Returns rows in no particular order; the caller owns ordering, because only it
+ * knows the order the ids came back in.
+ */
+exports.findTaskRows = async (taskIds) => {
+  if (!taskIds || taskIds.length === 0) return []
   const { rows } = await pool.query(
     `SELECT t.*, p.id AS project_id, p.name AS project_name
        FROM tasks t
        LEFT JOIN projects p ON t.project_id = p.id
-      WHERE t.id = $1`,
-    [taskId]
-  )
-  return rows[0] || null
-}
-
-exports.findTaskComments = async (taskId) => {
-  const { rows } = await pool.query(
-    `SELECT id, content, created_at, author_id
-       FROM comments WHERE task_id = $1 ORDER BY created_at ASC`,
-    [taskId]
+      WHERE t.id = ANY($1::uuid[])`,
+    [taskIds]
   )
   return rows
+}
+
+/**
+ * Comments for many tasks, in one query, grouped by task id.
+ *
+ * Ordered by task then time so each group comes out in the same `created_at ASC`
+ * order findTaskComments returns for a single task.
+ *
+ * @returns {Promise<Map<string, object[]>>} taskId -> comments
+ */
+exports.findCommentsForTasks = async (taskIds) => {
+  if (!taskIds || taskIds.length === 0) return new Map()
+  const { rows } = await pool.query(
+    `SELECT id, content, created_at, author_id, task_id
+       FROM comments
+      WHERE task_id = ANY($1::uuid[])
+      ORDER BY task_id, created_at ASC`,
+    [taskIds]
+  )
+  const byTask = new Map(taskIds.map((id) => [id, []]))
+  for (const r of rows) {
+    const list = byTask.get(r.task_id)
+    if (list) list.push(r)
+  }
+  return byTask
 }
 
 exports.findTaskOwner = async (id) => {

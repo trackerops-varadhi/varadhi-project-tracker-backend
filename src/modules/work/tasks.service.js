@@ -15,7 +15,8 @@ const isEmployee = (user) => String(user?.role || 'employee').toLowerCase() === 
 exports.isEmployee = isEmployee
 
 /**
- * One task with its comments, in the API shape.
+ * One task with its comments, in the API shape. A thin wrapper over the batch
+ * path below, so the shape is defined in exactly one place.
  *
  * The two `LEFT JOIN users` (assignee, reporter) and the comments'
  * `JOIN users` are gone; all three resolve through one batched
@@ -29,16 +30,49 @@ exports.isEmployee = isEmployee
  * behaviour you want then.
  */
 async function getTaskWithDetails(taskId) {
-  const t = await repo.findTaskRow(taskId)
-  if (!t) return null
+  const [task] = await getTasksWithDetails([taskId])
+  return task || null
+}
 
-  const comments = await repo.findTaskComments(taskId)
+/**
+ * The same shape as getTaskWithDetails, for many tasks, in a fixed number of
+ * queries: one for the task rows, one for every comment, one batched card
+ * lookup. Three round trips whatever the page size.
+ *
+ * This is what the list endpoints call. They used to call getTaskWithDetails
+ * once per row, so a 10-row page cost 30 queries and grew linearly — the N+1
+ * the module restructure was meant to close. Concurrency alone did not fix it:
+ * the query count was the problem, not the latency.
+ *
+ * Ordering follows `taskIds`, because that is where the sort lives (the ids come
+ * from an ORDER BY in SQL). Ids with no row — deleted between the two queries —
+ * are skipped rather than returned as null.
+ */
+async function getTasksWithDetails(taskIds) {
+  const ids = (taskIds || []).filter(Boolean)
+  if (ids.length === 0) return []
+
+  const [rows, commentsByTask] = await Promise.all([
+    repo.findTaskRows(ids),
+    repo.findCommentsForTasks(ids),
+  ])
+  if (rows.length === 0) return []
+
   const users = await identity.getUserCards([
-    t.assignee_id,
-    t.reporter_id,
-    ...comments.map((c) => c.author_id),
+    ...rows.map((t) => t.assignee_id),
+    ...rows.map((t) => t.reporter_id),
+    ...[...commentsByTask.values()].flat().map((c) => c.author_id),
   ])
 
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  return ids
+    .map((id) => byId.get(id))
+    .filter(Boolean)
+    .map((t) => shapeTask(t, commentsByTask.get(t.id) || [], users))
+}
+
+/** Row + its comments + a card map -> the API shape. */
+function shapeTask(t, comments, users) {
   const assignee = users.get(t.assignee_id)
   const reporter = users.get(t.reporter_id)
 
@@ -84,6 +118,7 @@ async function getTaskWithDetails(taskId) {
   }
 }
 exports.getTaskWithDetails = getTaskWithDetails
+exports.getTasksWithDetails = getTasksWithDetails
 
 /* ── reads ───────────────────────────────────────────────────────────────── */
 
@@ -100,14 +135,14 @@ exports.list = async (currentUser, query = {}) => {
 
   const total = await repo.countTasks(spec)
   const ids = await repo.listTaskIds(spec, { limit, offset: (page - 1) * limit })
-  const tasks = await Promise.all(ids.map((id) => getTaskWithDetails(id)))
+  const tasks = await getTasksWithDetails(ids)
 
   return { tasks, total, page, limit }
 }
 
 exports.listByProject = async (projectId) => {
   const ids = await repo.findTaskIdsByProject(projectId)
-  return Promise.all(ids.map((id) => getTaskWithDetails(id)))
+  return getTasksWithDetails(ids)
 }
 
 exports.stats = async (currentUser) => {
