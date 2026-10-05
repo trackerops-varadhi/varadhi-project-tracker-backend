@@ -36,13 +36,18 @@
 BEGIN;
 
 -- ── PART A: the ledgers ─────────────────────────────────────────────────────
+--
+-- SIX modules, not seven. `defects` is deliberately absent: production has none
+-- of the five bug tables (verified 2026-10-05 from a backup), so there is
+-- nothing there to baseline. Its tables are CREATED and its 0001 is EXECUTED by
+-- docs/production-defects-create.sql, which writes its own ledger row.
+-- Run that file BEFORE this one.
 -- Column shape copied from a live ledger: id serial PK, name varchar NOT NULL,
 -- run_on timestamp NOT NULL. node-pg-migrate records the migration FILENAME
 -- without its extension, which is why the value is '0001_baseline'.
 
 CREATE TABLE IF NOT EXISTS identity.pgmigrations     (id serial PRIMARY KEY, name varchar(255) NOT NULL, run_on timestamp NOT NULL);
 CREATE TABLE IF NOT EXISTS work.pgmigrations         (id serial PRIMARY KEY, name varchar(255) NOT NULL, run_on timestamp NOT NULL);
-CREATE TABLE IF NOT EXISTS defects.pgmigrations      (id serial PRIMARY KEY, name varchar(255) NOT NULL, run_on timestamp NOT NULL);
 CREATE TABLE IF NOT EXISTS notify.pgmigrations       (id serial PRIMARY KEY, name varchar(255) NOT NULL, run_on timestamp NOT NULL);
 CREATE TABLE IF NOT EXISTS integrations.pgmigrations (id serial PRIMARY KEY, name varchar(255) NOT NULL, run_on timestamp NOT NULL);
 CREATE TABLE IF NOT EXISTS files.pgmigrations        (id serial PRIMARY KEY, name varchar(255) NOT NULL, run_on timestamp NOT NULL);
@@ -55,7 +60,6 @@ DECLARE n int;
 BEGIN
   SELECT (SELECT count(*) FROM identity.pgmigrations)
        + (SELECT count(*) FROM work.pgmigrations)
-       + (SELECT count(*) FROM defects.pgmigrations)
        + (SELECT count(*) FROM notify.pgmigrations)
        + (SELECT count(*) FROM integrations.pgmigrations)
        + (SELECT count(*) FROM files.pgmigrations)
@@ -69,7 +73,6 @@ $guard$;
 
 INSERT INTO identity.pgmigrations     (name, run_on) VALUES ('0001_baseline', now());
 INSERT INTO work.pgmigrations         (name, run_on) VALUES ('0001_baseline', now());
-INSERT INTO defects.pgmigrations      (name, run_on) VALUES ('0001_baseline', now());
 INSERT INTO notify.pgmigrations       (name, run_on) VALUES ('0001_baseline', now());
 INSERT INTO integrations.pgmigrations (name, run_on) VALUES ('0001_baseline', now());
 INSERT INTO files.pgmigrations        (name, run_on) VALUES ('0001_baseline', now());

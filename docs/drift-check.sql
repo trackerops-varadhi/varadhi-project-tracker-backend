@@ -15,7 +15,23 @@
 -- 42P01 (missing table) or 42703 (missing column). This query is the only cheap
 -- way to find that out before committing to the migration.
 --
--- STOP CONDITION: query 1 and query 2 must each return ZERO rows.
+-- STOP CONDITION: query 1 and query 2 must each return ZERO rows,
+-- WITH ONE KNOWN AND HANDLED EXCEPTION (see below).
+--
+-- PRODUCTION, measured 2026-10-05 from a real backup: production has 24 app
+-- tables, not 29. All five defects tables are absent -- bugs, bug_comments,
+-- bug_attachments, bug_activity_logs, bug_sla_rules -- and so is
+-- public.bug_number_seq. Module 8 (Bugs Finder) was never deployed there.
+-- So on production you WILL see:
+--     query 1 -> 64 rows, every one a column of those five tables
+--     query 2 -> those five table names
+--     query 3 -> NULL
+-- That is expected and already handled: docs/production-cutover.sql detects a
+-- module with none of its tables, skips moving it, and
+-- docs/production-defects-create.sql creates the five tables in the defects
+-- schema instead. Rehearsed end to end on a restored production copy.
+--
+-- STOP for real if query 1 or 2 names ANY table outside those five.
 --
 -- KNOWN BASELINE GAP - expect query 4 to list these four on production, and do
 -- not treat them as drift:

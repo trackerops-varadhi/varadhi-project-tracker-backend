@@ -130,6 +130,8 @@ DECLARE
   n              int;
   dropped        int := 0;
   moved          int := 0;
+  expected_moves int := 0;
+  s              text;
   legacy_before  int;
   legacy_after   int;
 BEGIN
@@ -142,13 +144,34 @@ BEGIN
    WHERE ns.nspname = 'public' AND c.relkind = 'r'
      AND c.relname NOT IN (SELECT tbl FROM _owned);
   RAISE NOTICE 'public holds % table(s) we do not own; they must all survive', legacy_before;
-  -- ── PRECONDITION 1: every owned table is present in public ───────────────
-  SELECT count(*) INTO n FROM _owned o
-   WHERE to_regclass('public.' || quote_ident(o.tbl)) IS NULL;
-  IF n > 0 THEN
-    RAISE EXCEPTION
-      'PRECONDITION FAILED: % expected table(s) missing from public. Run docs/drift-check.sql first.', n;
-  END IF;
+  -- ── PRECONDITION 1: per module, all tables present or all absent ─────────
+  --
+  -- A module with NONE of its tables was never deployed to this database. That
+  -- is the case for `defects` on production: verified 2026-10-05 from a backup,
+  -- production has 24 app tables and zero bug objects, so Bugs Finder never
+  -- shipped there. Nothing to move for such a module; its tables get CREATED
+  -- instead, by docs/production-defects-create.sql, and its 0001 is executed
+  -- rather than baselined.
+  --
+  -- A module with SOME tables missing is real drift and must stop the release:
+  -- moving half a module and baselining the rest leaves the application calling
+  -- tables that will never exist.
+  FOR r IN
+    SELECT sch,
+           count(*) AS total,
+           count(*) FILTER (WHERE to_regclass('public.' || quote_ident(tbl)) IS NOT NULL) AS present
+      FROM _owned GROUP BY sch ORDER BY sch
+  LOOP
+    IF r.present = 0 THEN
+      RAISE NOTICE 'module % : 0 of % tables present - never deployed here, will be CREATED not moved',
+        r.sch, r.total;
+      DELETE FROM _owned WHERE sch = r.sch;     -- nothing to move for this module
+    ELSIF r.present < r.total THEN
+      RAISE EXCEPTION
+        'PRECONDITION FAILED: module % has % of % tables. Partial drift - run docs/drift-check.sql and resolve before cutting over.',
+        r.sch, r.present, r.total;
+    END IF;
+  END LOOP;
 
   -- ── PRECONDITION 2: no module schema exists yet ──────────────────────────
   SELECT count(*) INTO n FROM pg_namespace
@@ -158,17 +181,23 @@ BEGIN
       'PRECONDITION FAILED: % module schema(s) already exist. This database has already been migrated, or partly.', n;
   END IF;
 
-  -- ── PRECONDITION 3: the sequence exists ──────────────────────────────────
-  IF to_regclass('public.bug_number_seq') IS NULL THEN
+  -- ── PRECONDITION 3: the sequence, only if its module is being moved ──────
+  -- bug_number_seq belongs to defects. If defects was never deployed the
+  -- sequence is absent too, and its own CREATE comes with the tables.
+  IF EXISTS (SELECT 1 FROM _owned WHERE sch = 'defects')
+     AND to_regclass('public.bug_number_seq') IS NULL THEN
     RAISE EXCEPTION
-      'PRECONDITION FAILED: public.bug_number_seq is missing; bugs.bug_number would lose its default.';
+      'PRECONDITION FAILED: defects tables are present but public.bug_number_seq is missing; bugs.bug_number would lose its default.';
   END IF;
 
-  RAISE NOTICE 'preconditions OK: 29 tables present, no module schemas, sequence present';
+  SELECT count(*) INTO n FROM _owned;
+  RAISE NOTICE 'preconditions OK: % table(s) to move, no module schemas exist', n;
 
-  -- ── CREATE the schemas ───────────────────────────────────────────────────
-  FOR r IN SELECT DISTINCT sch FROM _owned ORDER BY sch LOOP
-    EXECUTE format('CREATE SCHEMA %I', r.sch);
+  -- ── CREATE all seven schemas ─────────────────────────────────────────────
+  -- All seven, not just the ones with tables to move: a module that was never
+  -- deployed still needs its schema so its migration can create tables in it.
+  FOREACH s IN ARRAY ARRAY['identity','work','defects','notify','integrations','files','workforce'] LOOP
+    EXECUTE format('CREATE SCHEMA %I', s);
   END LOOP;
 
   -- ── DROP foreign keys whose ends would land in different schemas ─────────
@@ -192,17 +221,21 @@ BEGIN
   END LOOP;
 
   -- ── MOVE the tables, then the sequence ───────────────────────────────────
+  SELECT count(*) INTO expected_moves FROM _owned;
   FOR r IN SELECT tbl, sch FROM _owned ORDER BY sch, tbl LOOP
     EXECUTE format('ALTER TABLE public.%I SET SCHEMA %I', r.tbl, r.sch);
     moved := moved + 1;
   END LOOP;
-  EXECUTE 'ALTER SEQUENCE public.bug_number_seq SET SCHEMA defects';
+  IF to_regclass('public.bug_number_seq') IS NOT NULL THEN
+    EXECUTE 'ALTER SEQUENCE public.bug_number_seq SET SCHEMA defects';
+    RAISE NOTICE 'moved sequence bug_number_seq into defects';
+  END IF;
 
   RAISE NOTICE 'moved % table(s); dropped % cross-module FK(s)', moved, dropped;
 
-  -- ── POSTCONDITION 1: all 29 moved, and each one arrived ──────────────────
-  IF moved <> 29 THEN
-    RAISE EXCEPTION 'POSTCONDITION FAILED: moved % table(s), expected 29', moved;
+  -- ── POSTCONDITION 1: everything we set out to move, moved ────────────────
+  IF moved <> expected_moves THEN
+    RAISE EXCEPTION 'POSTCONDITION FAILED: moved % table(s), expected %', moved, expected_moves;
   END IF;
   SELECT count(*) INTO n FROM _owned o
    WHERE to_regclass(quote_ident(o.sch) || '.' || quote_ident(o.tbl)) IS NULL;
