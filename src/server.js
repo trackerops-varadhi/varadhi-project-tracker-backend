@@ -214,6 +214,7 @@ const MODULES = [
   require('./modules/identity'),
   require('./modules/notify'),
   require('./modules/workforce'),
+  require('./modules/people'),
   require('./modules/files'),
   require('./modules/defects'),
   require('./modules/work'),

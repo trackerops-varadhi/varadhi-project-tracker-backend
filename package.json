@@ -10,6 +10,7 @@
     "test:concurrency": "node scripts/concurrency.test.js",
     "test:push-retry": "node scripts/push-retry.test.js",
     "test:bugs": "node scripts/bugs.test.js",
+    "test:people": "node scripts/people.test.js",
     "test:crypto": "node scripts/crypto.test.js",
     "test:calendar": "node scripts/calendar-sync.test.js",
     "test:teams": "node scripts/teams-webhook.test.js",

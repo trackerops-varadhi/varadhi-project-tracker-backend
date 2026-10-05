@@ -58,6 +58,7 @@ const OWN = {
   integrations: 'teams_webhooks',
   files: 'documents',
   workforce: 'time_logs',
+  people: 'employee_profiles',
 }
 const FOREIGN = {
   identity: 'tasks',
@@ -67,6 +68,7 @@ const FOREIGN = {
   integrations: 'users',
   files: 'projects',
   workforce: 'tasks',
+  people: 'users',
 }
 
 async function main() {

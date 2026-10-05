@@ -11,6 +11,7 @@ migrations/
   integrations/0001_baseline.js
   files/0001_baseline.js
   workforce/0001_baseline.js
+  people/0001_people_core.js     ← NOT a baseline: creates tables, must run everywhere
 ```
 
 ## Commands

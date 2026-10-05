@@ -71,7 +71,7 @@ const { Pool } = require('pg')
 /* ── Modules, in fixed order ──────────────────────────────────────────────── */
 
 const MODULES = [
-  'identity', 'work', 'defects', 'notify', 'integrations', 'files', 'workforce',
+  'identity', 'work', 'defects', 'notify', 'integrations', 'files', 'workforce', 'people',
 ]
 
 const MIGRATIONS_ROOT = path.join(__dirname, '..', '..', 'migrations')
@@ -327,6 +327,13 @@ const cmdBaseline = async (opts) => {
       const files = migrationFiles(mod)
       const first = files[0]
       if (!first) { console.log(`  ${mod.padEnd(13)} no migrations — skipped`); continue }
+      // A module born after the split (people) has a real 0001 that creates
+      // tables. Marking it applied would leave the ledger claiming tables that
+      // do not exist, so only a transcript baseline is ever marked.
+      if (!/_baseline\.js$/.test(first)) {
+        console.log(`  ${mod.padEnd(13)} ${first} is not a baseline — skipped (run \`migrate\`)`)
+        continue
+      }
 
       await ensureSchema(pool, mod)
       await pool.query(`

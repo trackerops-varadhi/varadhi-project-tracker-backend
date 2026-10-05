@@ -27,7 +27,7 @@
 const db = require('../src/platform/db')
 
 const MODULES = [
-  'identity', 'work', 'defects', 'notify', 'integrations', 'files', 'workforce',
+  'identity', 'work', 'defects', 'notify', 'integrations', 'files', 'workforce', 'people',
 ]
 
 // Lazily resolved: a suite that only touches identity never opens the other six.
@@ -59,6 +59,8 @@ const OWNER = {
   teams_webhooks: 'integrations', teams_delivery_log: 'integrations',
   documents: 'files', folders: 'files',
   leave_requests: 'workforce', time_logs: 'workforce',
+  employee_profiles: 'people', employee_exits: 'people',
+  candidates: 'people', interviews: 'people',
 }
 
 exports.poolFor = (table) => {

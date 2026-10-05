@@ -129,7 +129,7 @@ const ssl = process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false 
  * refused.
  */
 const MODULE_SCHEMAS = [
-  'identity', 'work', 'defects', 'notify', 'integrations', 'files', 'workforce',
+  'identity', 'work', 'defects', 'notify', 'integrations', 'files', 'workforce', 'people',
 ]
 
 const PER_MODULE_MAX = Number(process.env.DB_POOL_MAX_PER_MODULE) || 2

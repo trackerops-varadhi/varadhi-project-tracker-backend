@@ -57,3 +57,20 @@ exports.updateLeaveStatus = async (id, status) => {
   )
   return rows[0] || null
 }
+
+// Leave requests that touch a date range, any status. The caller decides what
+// counts (approved = on leave, pending = awaiting a decision).
+//
+// `applied_on` is the calendar day the request was made in the business time
+// zone. created_at is a zone-less timestamp written by NOW() on a UTC session,
+// so it is read as UTC first and then converted.
+exports.findLeaveOverlapping = async (from, to, timeZone) => {
+  const { rows } = await pool.query(
+    `SELECT id, user_id, start_date, end_date, status, day_type,
+            ((created_at AT TIME ZONE 'UTC') AT TIME ZONE $3)::date::text AS applied_on
+       FROM leave_requests
+      WHERE start_date <= $2 AND end_date >= $1`,
+    [from, to, timeZone]
+  )
+  return rows
+}

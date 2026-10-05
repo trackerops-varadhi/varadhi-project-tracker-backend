@@ -106,3 +106,17 @@ exports.closeCheckOut = async (id, { checkOut, hours, note }) => {
   )
   return rows[0] || null
 }
+
+// Who logged time on each day of a range — the attendance signal people's HR
+// dashboard counts as "present". Any row on the date counts, check-in or a
+// manual entry, matching what the Time screen shows as a worked day.
+exports.findPresenceByDate = async (from, to) => {
+  const { rows } = await pool.query(
+    `SELECT date, array_agg(DISTINCT user_id) AS user_ids
+       FROM time_logs
+      WHERE date BETWEEN $1 AND $2 AND user_id IS NOT NULL
+      GROUP BY date`,
+    [from, to]
+  )
+  return rows
+}

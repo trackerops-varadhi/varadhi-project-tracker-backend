@@ -44,7 +44,7 @@
  */
 const assertNotSplit = async (pool, scriptName, { exit = true } = {}) => {
   const MODULE_SCHEMAS = [
-    'identity', 'work', 'defects', 'notify', 'integrations', 'files', 'workforce',
+    'identity', 'work', 'defects', 'notify', 'integrations', 'files', 'workforce', 'people',
   ]
 
   let present = []
