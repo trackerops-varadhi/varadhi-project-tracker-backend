@@ -788,44 +788,43 @@ SELECT nspname FROM pg_namespace
 SELECT tableowner, count(*) AS tables FROM pg_tables
  WHERE schemaname = 'public' GROUP BY 1 ORDER BY 2 DESC;
 
-\echo '== 7. Baseline row counts — keep this output to compare after the split =='
-SELECT 'users' AS t, count(*) FROM public.users
-UNION ALL SELECT 'user_sessions', count(*) FROM public.user_sessions
-UNION ALL SELECT 'user_tokens', count(*) FROM public.user_tokens
-UNION ALL SELECT 'projects', count(*) FROM public.projects
-UNION ALL SELECT 'project_members', count(*) FROM public.project_members
-UNION ALL SELECT 'tasks', count(*) FROM public.tasks
-UNION ALL SELECT 'comments', count(*) FROM public.comments
-UNION ALL SELECT 'bugs', count(*) FROM public.bugs
-UNION ALL SELECT 'bug_comments', count(*) FROM public.bug_comments
-UNION ALL SELECT 'bug_attachments', count(*) FROM public.bug_attachments
-UNION ALL SELECT 'bug_activity_logs', count(*) FROM public.bug_activity_logs
-UNION ALL SELECT 'bug_sla_rules', count(*) FROM public.bug_sla_rules
-UNION ALL SELECT 'notifications', count(*) FROM public.notifications
-UNION ALL SELECT 'notification_preferences', count(*) FROM public.notification_preferences
-UNION ALL SELECT 'notification_snoozes', count(*) FROM public.notification_snoozes
-UNION ALL SELECT 'notification_action_log', count(*) FROM public.notification_action_log
-UNION ALL SELECT 'notification_logs', count(*) FROM public.notification_logs
-UNION ALL SELECT 'push_subscriptions', count(*) FROM public.push_subscriptions
-UNION ALL SELECT 'push_delivery_retries', count(*) FROM public.push_delivery_retries
-UNION ALL SELECT 'calendar_connections', count(*) FROM public.calendar_connections
-UNION ALL SELECT 'calendar_sync_settings', count(*) FROM public.calendar_sync_settings
-UNION ALL SELECT 'calendar_event_links', count(*) FROM public.calendar_event_links
-UNION ALL SELECT 'calendar_sync_conflicts', count(*) FROM public.calendar_sync_conflicts
-UNION ALL SELECT 'teams_webhooks', count(*) FROM public.teams_webhooks
-UNION ALL SELECT 'teams_delivery_log', count(*) FROM public.teams_delivery_log
-UNION ALL SELECT 'documents', count(*) FROM public.documents
-UNION ALL SELECT 'folders', count(*) FROM public.folders
-UNION ALL SELECT 'leave_requests', count(*) FROM public.leave_requests
-UNION ALL SELECT 'time_logs', count(*) FROM public.time_logs
- ORDER BY 1;
+\echo '== 7. Row counts - keep this output to compare after the split =='
+-- Skips tables that do not exist, so a database missing a whole module (as
+-- production is missing defects) still reports everything else instead of
+-- aborting. Read-only: counts only, no temp table, no writes.
+DO $counts$
+DECLARE t text; n bigint; present int := 0; absent int := 0;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['bug_activity_logs', 'bug_attachments', 'bug_comments', 'bug_sla_rules', 'bugs', 'calendar_connections', 'calendar_event_links', 'calendar_sync_conflicts', 'calendar_sync_settings', 'comments', 'documents', 'folders', 'leave_requests', 'notification_action_log', 'notification_logs', 'notification_preferences', 'notification_snoozes', 'notifications', 'project_members', 'projects', 'push_delivery_retries', 'push_subscriptions', 'tasks', 'teams_delivery_log', 'teams_webhooks', 'time_logs', 'user_sessions', 'user_tokens', 'users'] LOOP
+    IF to_regclass('public.' || quote_ident(t)) IS NULL THEN
+      absent := absent + 1;
+      RAISE NOTICE '% = (table absent)', rpad(t, 26);
+    ELSE
+      EXECUTE format('SELECT count(*) FROM public.%I', t) INTO n;
+      present := present + 1;
+      RAISE NOTICE '% = %', rpad(t, 26), n;
+    END IF;
+  END LOOP;
+  RAISE NOTICE '--- % table(s) counted, % absent', present, absent;
+END
+$counts$;
 
 \echo '== 8. Encrypted columns that must survive unchanged (counts only) =='
--- The migration moves rows; it never re-encrypts. These must be identical after.
-SELECT 'calendar_connections.access_token' AS col, count(*) AS non_null
-  FROM public.calendar_connections WHERE access_token IS NOT NULL
-UNION ALL SELECT 'calendar_connections.refresh_token', count(*)
-  FROM public.calendar_connections WHERE refresh_token IS NOT NULL
-UNION ALL SELECT 'teams_webhooks.webhook_url', count(*)
-  FROM public.teams_webhooks WHERE webhook_url IS NOT NULL
- ORDER BY 1;
+-- Ciphertext is moved, never re-encrypted. These counts must match after the
+-- cutover, and the values must still decrypt - which holds only while
+-- ENCRYPTION_KEY stays unset and JWT_SECRET is not rotated.
+DO $enc$
+DECLARE n bigint;
+BEGIN
+  IF to_regclass('public.calendar_connections') IS NOT NULL THEN
+    EXECUTE 'SELECT count(*) FROM public.calendar_connections WHERE access_token IS NOT NULL' INTO n;
+    RAISE NOTICE 'calendar_connections.access_token  non-null = %', n;
+    EXECUTE 'SELECT count(*) FROM public.calendar_connections WHERE refresh_token IS NOT NULL' INTO n;
+    RAISE NOTICE 'calendar_connections.refresh_token non-null = %', n;
+  END IF;
+  IF to_regclass('public.teams_webhooks') IS NOT NULL THEN
+    EXECUTE 'SELECT count(*) FROM public.teams_webhooks WHERE webhook_url IS NOT NULL' INTO n;
+    RAISE NOTICE 'teams_webhooks.webhook_url         non-null = %', n;
+  END IF;
+END
+$enc$;
