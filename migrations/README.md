@@ -90,6 +90,24 @@ because production is still pre-split and that is the tool which moves it. The o
 exception to "nothing outside the ledger" is `migrate-sessions.js`, whose one-time
 backfill is still covered by `scripts/migration-compat.test.js`.
 
+## Migrate BEFORE you deploy
+
+The module pools set `search_path` to `<module>,extensions` — no `public` fallback
+(`src/platform/db.js`). An application deployed against a database that has not been
+migrated will boot, fail every query, and report `0-of-7` schemas at `/health/ready`.
+Nothing in `render.yaml` migrates either. So the order is always:
+
+1. migrate the database (for production: `migrate-schema-split.js --apply`, then
+   `npm run migrate:baseline`, then `npm run migrate`),
+2. verify with `npm run migrate:status` and `npm run test:isolation`,
+3. then deploy the service.
+
+`public` was on the path until 2026-10-05. It was removed because a pre-split backend
+ran the legacy provisioner against the development database and left 29 empty copies of
+the module tables in `public`; while those existed, a stray cross-module query resolved
+against an empty shadow instead of raising. `npm run test:isolation` is the regression
+test, and it also warns when such copies are present.
+
 ## Safety
 
 | Target | `up` | `down` | `status` |

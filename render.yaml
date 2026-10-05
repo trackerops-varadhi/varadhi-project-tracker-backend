@@ -1,3 +1,28 @@
+# MIGRATIONS ARE NOT RUN BY THIS FILE. Read before deploying.
+#
+# Neither buildCommand nor startCommand migrates, and the API no longer migrates
+# at boot (that path was removed when node-pg-migrate became the only migration
+# system). So a deploy applies ZERO schema changes.
+#
+# The module pools also now require their schemas to exist — src/platform/db.js
+# sets search_path to `<module>,extensions` with no `public` fallback. Deploying
+# this service against a database that has not had the schema split applied will
+# start, then fail every query, and /health/ready will report 0-of-7 schemas.
+#
+# Order is therefore: migrate the database first, verify, then deploy. See the
+# deployment runbook at docs/PRODUCTION-DEPLOYMENT.md.
+#
+# TWO THINGS THIS FILE DOES NOT CONFIGURE, both deliberate:
+#   RATE_LIMIT_STORE  unset means the in-memory store, which is correct for a
+#                     single instance. Set it to `postgres` AFTER migration 0002
+#                     has created identity.rate_limit_buckets — and before ever
+#                     running a second instance, because the memory store with
+#                     MULTI_INSTANCE=true refuses to boot by design.
+#   DATABASE_URL      the `databases:` block below declares a Render-managed
+#                     Postgres. Production actually runs on Supabase, so the
+#                     live service overrides DATABASE_URL in the dashboard. If
+#                     this blueprint is ever re-applied, confirm which database
+#                     the value points at before deploying.
 services:
   - type: web
     name: varadhi-backend
@@ -5,6 +30,10 @@ services:
     runtime: node
     buildCommand: npm install
     startCommand: npm start
+    # Liveness, deliberately not /health/ready. Readiness touches the database,
+    # so health-checking it would make a database blip roll back a good deploy
+    # (and would fail outright before the schema migration has run).
+    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production

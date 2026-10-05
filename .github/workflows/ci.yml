@@ -110,6 +110,13 @@ jobs:
       - name: Migration system
         run: npm run test:migrate-system
 
+      # Runs against the database the step above just migrated. Read-only: it
+      # asserts a module pool cannot resolve another module's table, which is
+      # the property that silently broke once `public` held copies of them.
+      # Skips (does not fail) if the schemas are not present.
+      - name: Schema isolation
+        run: npm run test:isolation
+
       - name: Offline suites
         run: |
           set -euo pipefail
@@ -136,5 +143,5 @@ jobs:
           echo "Not run here (needs a booted API on :5000 and a seeded database):"
           echo "  test:bugs test:teams test:calendar test:sessions"
           echo "  test:security test:sibling-sync test:concurrency"
-          echo "  test:migration test:push-retry test:ops"
+          echo "  test:migration test:push-retry test:ops test:project-deletion"
           echo "Run those locally against dev before merging."
