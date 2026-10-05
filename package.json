@@ -26,7 +26,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test:ops-infra": "node scripts/ops-infra.test.js",
-    "test:project-deletion": "node scripts/project-deletion.test.js"
+    "test:project-deletion": "node scripts/project-deletion.test.js",
+    "test:isolation": "node scripts/schema-isolation.test.js"
   },
   "engines": {
     "node": ">=18.0.0"

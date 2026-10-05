@@ -13,18 +13,46 @@
  * path, which means every module can reach every table — the boundary would
  * exist only in review comments. A pool per module is what makes it real.
  *
- * WHY `public` IS STILL ON THE PATH, and why that does not weaken it
- * After the schema split, `public` holds only the seven legacy Prisma tables —
- * no module's tables live there. So `identity`'s pool asking for `tasks` finds
- * nothing in `identity` and nothing in `public`, and errors. Keeping `public`
- * and `extensions` on the path costs no isolation and keeps extension
- * functions resolvable.
+ * WHY `public` IS **NOT** ON THE PATH ANY MORE
+ * It used to be, on the reasoning that `public` holds only the seven legacy
+ * Prisma tables — so `identity`'s pool asking for `tasks` would find nothing in
+ * `identity`, nothing in `public`, and error.
  *
- * THIS IS SAFE TO RUN BEFORE THE SCHEMA SPLIT.
- * Until the migration runs, every table is still in `public`, which is on every
- * module's path — so every query resolves exactly as it does today. The pools
- * start enforcing the boundary the moment the tables move, and not before.
- * That ordering is deliberate: this ships first, the migration second.
+ * That reasoning was conditional on a fact no code controls. On 2026-10-03 a
+ * pre-split backend (whose pool sets no search_path, so it works in `public`)
+ * was pointed at the development database and ran the legacy provisioner. It
+ * created 29 EMPTY copies of the module tables in `public` and then served
+ * traffic into them. With those copies present, `public` second on the path
+ * turned every stray cross-module query into a silent wrong answer: from the
+ * `work` pool, `SELECT count(*) FROM notifications` returned 1 (the empty
+ * shadow) while `notify.notifications` held 1442 rows. Isolation measured 0/7.
+ *
+ * So the path is now the module's own schema plus `extensions`, and nothing
+ * else. A cross-module name has nowhere left to resolve and raises 42P01
+ * whatever else exists in the database — the guarantee no longer depends on
+ * `public` staying clean.
+ *
+ * `extensions` stays because that is where this database keeps gen_random_uuid,
+ * uuid_generate_v4, digest and crypt (verified; `public` holds none of them).
+ * Column DEFAULTs are not affected either way: Postgres resolves them to an OID
+ * when the column is created, not per query.
+ *
+ * scripts/schema-isolation.test.js is the regression test for all of this.
+ *
+ * THIS NOW REQUIRES THE SCHEMA SPLIT TO HAVE RUN. Deployment order matters.
+ * While `public` was on the path this code could run against an unsplit
+ * database — every table was still in `public`, so every query resolved, and
+ * the plan shipped the pools first and the migration second.
+ *
+ * That is no longer true, and the trade is deliberate. A pre-split deployment
+ * now fails fast: the module schemas do not exist, /health/ready reports
+ * 0-of-7 schemas and returns 503, and queries raise. The alternative — the old
+ * fallback — is exactly what let a stale instance quietly read and write a
+ * second copy of the data in `public` for two days without anything failing.
+ * Loud and down beats silent and forked.
+ *
+ * So, in production: migrate FIRST (apply the schema split, baseline the
+ * ledgers), verify, and only then deploy this code. See the deployment runbook.
  *
  * CONNECTION BUDGET
  * Eight pools instead of one. Pools open connections lazily and release them
@@ -168,7 +196,9 @@ const forSchema = (schema) => {
     ssl,
     // libpq connection option, applied when each connection is established, so
     // there is no window where a query runs on the default path.
-    options: `-c search_path=${schema},public,extensions`,
+    // No `public`: see the header. A cross-module name must have nowhere to
+    // resolve, even when `public` contains copies of the module tables.
+    options: `-c search_path=${schema},extensions`,
     max: PER_MODULE_MAX,
     idleTimeoutMillis: 10_000,
   })
