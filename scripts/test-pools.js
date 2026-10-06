@@ -60,7 +60,7 @@ const OWNER = {
   documents: 'files', folders: 'files',
   leave_requests: 'workforce', time_logs: 'workforce',
   employee_profiles: 'people', employee_exits: 'people',
-  candidates: 'people', interviews: 'people',
+  candidates: 'people', interviews: 'people', candidate_resumes: 'people',
 }
 
 exports.poolFor = (table) => {

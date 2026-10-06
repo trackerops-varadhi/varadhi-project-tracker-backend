@@ -8,8 +8,17 @@ const { protect } = require('../../middleware/auth.middleware')
 // their own requests, and only admin/manager may change a status.
 router.use(protect)
 
+// Static paths before /:id.
+// Absence calendar: all roles, no reason text (Module 9, absentee visibility).
+router.get('/calendar', ctrl.getCalendar)
+// Own balance for everyone; ?userId= / ?scope=team and PUT are role-checked
+// in the service (admin/manager/hr read, admin/hr write).
+router.get('/balances', ctrl.getBalances)
+router.put('/balances', ctrl.setEntitlement)
+
 router.get('/', ctrl.getLeaveRequests)
 router.post('/', ctrl.createLeaveRequest)
 router.patch('/:id/status', ctrl.updateLeaveRequestStatus)
+router.patch('/:id/cancel', ctrl.cancelLeaveRequest)
 
 module.exports = router

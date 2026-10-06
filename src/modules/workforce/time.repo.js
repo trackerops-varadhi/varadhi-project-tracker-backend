@@ -27,12 +27,14 @@ exports.listTimeLogs = async ({ scopeUserId = null, projectId = null }) => {
   return rows
 }
 
-exports.insertTimeLog = async ({ userId, projectId, date, hours, note, checkIn, checkOut }) => {
+exports.insertTimeLog = async ({
+  userId, projectId, date, hours, note, checkIn, checkOut, attendanceStatus = null,
+}) => {
   const { rows } = await pool.query(
-    `INSERT INTO time_logs (user_id, project_id, date, hours, note, check_in, check_out)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO time_logs (user_id, project_id, date, hours, note, check_in, check_out, attendance_status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
-    [userId, projectId, date, hours, note, checkIn, checkOut]
+    [userId, projectId, date, hours, note, checkIn, checkOut, attendanceStatus]
   )
   return rows[0]
 }

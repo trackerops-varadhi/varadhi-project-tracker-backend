@@ -208,6 +208,15 @@ const NOTIFICATION_TYPES = {
   BUG_SLA_AT_RISK: 'bug_sla_at_risk',
   BUG_SLA_BREACHED: 'bug_sla_breached',
   BUG_CRITICAL_REPORTED: 'bug_critical_reported',
+
+  // People & Workforce (Module 9). See docs/Module-9-People-Plan.md §4.6.
+  RESIGNATION_RECORDED: 'resignation_recorded',
+  EMPLOYEE_PROFILE_INCOMPLETE: 'employee_profile_incomplete',
+  INTERVIEW_SCHEDULED: 'interview_scheduled',
+  INTERVIEW_FEEDBACK_PENDING: 'interview_feedback_pending',
+  CANDIDATE_STATUS_CHANGED: 'candidate_status_changed',
+  WORK_STATUS_MISSING: 'work_status_missing',
+  LEAVE_LATE_NOTICE: 'leave_late_notice',
 };
 
 // Maps a notification type to the opt-out category checkbox it belongs to
@@ -264,6 +273,15 @@ const TYPE_CATEGORY_MAP = {
   [NOTIFICATION_TYPES.BUG_COMMENT]: 'comment_added',
   [NOTIFICATION_TYPES.BUG_REOPENED]: 'task_status_changed',
   [NOTIFICATION_TYPES.BUG_CLOSED]: 'task_status_changed',
+  // People & Workforce. No dedicated HR preference columns exist, so these
+  // ride the system category, like leave and time already do.
+  [NOTIFICATION_TYPES.RESIGNATION_RECORDED]: 'system_notifications',
+  [NOTIFICATION_TYPES.EMPLOYEE_PROFILE_INCOMPLETE]: 'system_notifications',
+  [NOTIFICATION_TYPES.INTERVIEW_SCHEDULED]: 'system_notifications',
+  [NOTIFICATION_TYPES.INTERVIEW_FEEDBACK_PENDING]: 'system_notifications',
+  [NOTIFICATION_TYPES.CANDIDATE_STATUS_CHANGED]: 'system_notifications',
+  [NOTIFICATION_TYPES.WORK_STATUS_MISSING]: 'system_notifications',
+  [NOTIFICATION_TYPES.LEAVE_LATE_NOTICE]: 'system_notifications',
 };
 
 // Event types worth an email, per the spec — everything else stays in-app
@@ -284,6 +302,9 @@ const EMAIL_WORTHY_TYPES = new Set([
   // email — they are the two bug events someone is accountable for acting on.
   NOTIFICATION_TYPES.BUG_ASSIGNED,
   NOTIFICATION_TYPES.BUG_SLA_BREACHED,
+  // An interview on someone's calendar, and a resignation, are both worth an email.
+  NOTIFICATION_TYPES.INTERVIEW_SCHEDULED,
+  NOTIFICATION_TYPES.RESIGNATION_RECORDED,
 ]);
 
 // Event types worth a push, per the spec. Same story — push is already a
@@ -303,6 +324,8 @@ const PUSH_WORTHY_TYPES = new Set([
   NOTIFICATION_TYPES.BUG_SLA_AT_RISK,
   NOTIFICATION_TYPES.BUG_SLA_BREACHED,
   NOTIFICATION_TYPES.BUG_CRITICAL_REPORTED,
+  NOTIFICATION_TYPES.INTERVIEW_SCHEDULED,
+  NOTIFICATION_TYPES.WORK_STATUS_MISSING,
 ]);
 
 const APP_URL = process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000';

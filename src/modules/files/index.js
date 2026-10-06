@@ -46,6 +46,10 @@ exports.removeStoredFile = async (pathOrUrl) => {
 
 exports.getFileExtension = async (fileName) => storage.getExtension(fileName)
 
+// The one filename sanitiser, for modules that keep their own objects (people's
+// private resume bucket) but must not grow a second, drifting copy of it.
+exports.sanitizeFileName = async (fileName) => storage.sanitizeFileName(fileName)
+
 /* ── Document mirroring ─────────────────────────────────────────────────── */
 
 /**

@@ -29,6 +29,17 @@ const normalizeHours = (value) => {
   return Math.round(n * 100) / 100
 }
 
+// Module 9: how the person worked that day. 'on_leave'/'absent' are derived by
+// the attendance register, never self-reported on a time log.
+const ATTENDANCE_STATUSES = ['present', 'wfh', 'half_day']
+const attendanceStatusOf = (value) => {
+  if (value === undefined || value === null || value === '') return null
+  if (!ATTENDANCE_STATUSES.includes(String(value))) {
+    throw new TimeError(`Attendance status must be one of: ${ATTENDANCE_STATUSES.join(', ')}.`)
+  }
+  return String(value)
+}
+
 // Postgres throws `invalid input syntax for type date` on a bad string, which
 // would otherwise reach the client as a 500.
 const isValidDate = (value) => !Number.isNaN(new Date(value).getTime())
@@ -46,6 +57,7 @@ const mapTimeLog = (row, userCard, projectCard) => {
     hours: row.hours,
     checkIn: row.check_in,
     checkOut: row.check_out,
+    attendanceStatus: row.attendance_status ?? null,
     note: row.note,
     createdAt: row.created_at,
   }
@@ -100,6 +112,7 @@ exports.listForUser = async (currentUser, { projectId } = {}) => {
 // ── writes ───────────────────────────────────────────────────────────────
 exports.create = async (currentUser, body) => {
   const { projectId, date, hours, note, checkIn, checkOut } = body
+  const attendanceStatus = attendanceStatusOf(body.attendanceStatus)
 
   if (!date) throw new TimeError('Date is required.')
   if (!isValidDate(date)) throw new TimeError('Date is not a valid date.')
@@ -138,6 +151,7 @@ exports.create = async (currentUser, body) => {
     note: note || null,
     checkIn: checkIn || null,
     checkOut: checkOut || null,
+    attendanceStatus,
   })
 
   await notifyLogged(row)
@@ -146,6 +160,7 @@ exports.create = async (currentUser, body) => {
 
 exports.checkIn = async (currentUser, body) => {
   const { projectId, date, checkIn, note } = body
+  const attendanceStatus = attendanceStatusOf(body.attendanceStatus) || 'present'
   if (!date || !checkIn) throw new TimeError('Date and checkIn timestamp are required.')
   if (!isValidDate(date)) throw new TimeError('Date is not a valid date.')
   if (!isValidDate(checkIn)) throw new TimeError('checkIn is not a valid timestamp.')
@@ -166,6 +181,7 @@ exports.checkIn = async (currentUser, body) => {
     note: note || null,
     checkIn,
     checkOut: null,
+    attendanceStatus,
   })
   return withCard(row)
 }

@@ -12,6 +12,7 @@
 // dashboard. Accessors, not joins — people never sees these tables.
 
 const workSubscriber = require('./work-subscriber')
+const jobs = require('./jobs')
 const timeRepo = require('./time.repo')
 const leaveRepo = require('./leave.repo')
 
@@ -19,6 +20,17 @@ exports.mount = [
   { path: '/api/leave-management', router: require('./leave.routes') },
   { path: '/api/time-management', router: require('./time.routes') },
 ]
+
+/* ── Background jobs (Module 9, Phase 3) ─────────────────────────────────── */
+//
+// This module says WHAT its jobs are; server.js decides WHETHER they run
+// (ENABLE_CRON and the leader lock), as for every other module.
+exports.jobs = [jobs.workStatusNudge, jobs.workStatusEscalate, jobs.leaveNoticeReminder]
+  .map((j) => ({ name: j.name, start: j.start, stop: j.stop }))
+
+// Test seams, like defects' runSlaSweepNow.
+exports.runWorkStatusNudgeNow = () => jobs.workStatusNudge.runNow()
+exports.runWorkStatusEscalateNow = () => jobs.workStatusEscalate.runNow()
 
 /* ── Event subscriptions ────────────────────────────────────────────────── */
 //
@@ -54,6 +66,8 @@ exports.getLeaveOverlapping = async (from, to, timeZone) => {
     endDate: r.end_date,
     status: r.status,
     dayType: r.day_type,
+    type: r.type,
+    planningType: r.planning_type,
     appliedOn: r.applied_on,
   }))
 }
