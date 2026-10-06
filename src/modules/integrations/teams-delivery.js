@@ -22,7 +22,7 @@
  */
 
 const pool = require('../../platform/db').forSchema('integrations')
-const { decrypt } = require('./crypto')
+const { decrypt } = require('../../platform/crypto')
 const { cardForNotification, testCard } = require('./teams-cards')
 
 /** Bounded: 4 attempts over roughly 15 minutes. */

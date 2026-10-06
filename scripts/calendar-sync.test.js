@@ -17,7 +17,7 @@ require('dotenv').config()
 const { identity, integrations, notify, work } = require('./test-pools')
 const sync = require('../src/modules/integrations/calendar-sync')
 const { createMockProvider } = require('../src/modules/integrations/calendar-providers')
-const { encrypt } = require('../src/modules/integrations/crypto')
+const { encrypt } = require('../src/platform/crypto')
 
 let pass = 0, fail = 0
 const check = (n, c, e = '') => {

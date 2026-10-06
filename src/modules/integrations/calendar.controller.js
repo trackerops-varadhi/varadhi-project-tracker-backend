@@ -24,7 +24,7 @@ const {
   PROVIDER_NAMES,
 } = require('./calendar-providers')
 const { buildStateToken, verifyStateToken } = require('./oauth-state')
-const { encrypt, decrypt, isEncryptionAvailable } = require('./crypto')
+const { encrypt, decrypt, isEncryptionAvailable } = require('../../platform/crypto')
 const {
   syncConnection,
   mapTaskToEvent,

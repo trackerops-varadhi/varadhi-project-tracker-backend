@@ -17,7 +17,7 @@
 const pool = require('../../platform/db').forSchema('integrations')
 const work = require('../work')
 const { successResponse, errorResponse } = require('../../shared/response')
-const { encrypt, maskSecret, isEncryptionAvailable } = require('./crypto')
+const { encrypt, maskSecret, isEncryptionAvailable } = require('../../platform/crypto')
 const { sendTestMessage, FAILURE_THRESHOLD } = require('./teams-delivery')
 const { NOTIFICATION_TYPES } = require('../notify')
 

@@ -114,16 +114,20 @@ exports.updateProfile = async (currentUser, { name, email }) => {
 
 /* ── Administration ─────────────────────────────────────────────────────── */
 
-const VALID_ROLES = ['admin', 'manager', 'employee']
+// 'hr' (Module 9) can be granted here, but invite/role/deactivate stay admin-only.
+const VALID_ROLES = ['admin', 'manager', 'employee', 'hr']
 
-exports.invite = async (currentUser, { email, role }) => {
+// `name` is optional: the Users screen invites by email alone, while people's
+// candidate conversion already knows the person's name.
+exports.invite = async (currentUser, { email, role, name }) => {
   if (!email) throw new UserError('Email is required.')
+  if (role && !VALID_ROLES.includes(role)) throw new UserError('Invalid role.')
   if (await repo.findByEmail(email)) throw new UserError('User already exists.')
 
   const inviteToken = crypto.randomBytes(32).toString('hex')
-  const placeholderName = email.split('@')[0]
+  const placeholderName = (name && String(name).trim()) || email.split('@')[0]
 
-  await repo.insertInvitedUser({
+  const created = await repo.insertInvitedUser({
     name: placeholderName,
     email,
     role: role || 'employee',
@@ -145,7 +149,7 @@ exports.invite = async (currentUser, { email, role }) => {
     })
   })
 
-  return { email, role }
+  return { id: created.id, email, role: role || 'employee' }
 }
 
 exports.updateRole = async (currentUser, targetId, role) => {

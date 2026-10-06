@@ -11,8 +11,13 @@ const {
   ASSIGN_ACTIONS,
 } = require('./notifications')
 
-const isEmployee = (user) => String(user?.role || 'employee').toLowerCase() === 'employee'
-exports.isEmployee = isEmployee
+// ALLOW-LIST, not deny-list (Module 9). This used to ask "is this an
+// employee?", so any role that was not literally 'employee' — such as the new
+// 'hr' — fell through to manager-level access. Now only admin and manager are
+// elevated and every other role, present or future, is scoped to its own rows.
+const isRestricted = (user) =>
+  !['admin', 'manager'].includes(String(user?.role || '').toLowerCase())
+exports.isRestricted = isRestricted
 
 /**
  * One task with its comments, in the API shape. A thin wrapper over the batch
@@ -129,7 +134,7 @@ exports.list = async (currentUser, query = {}) => {
 
   const spec = {
     // Employees see only tasks assigned to them.
-    scopeUserId: isEmployee(currentUser) ? currentUser.id : null,
+    scopeUserId: isRestricted(currentUser) ? currentUser.id : null,
     status, priority, type, assigneeId, projectId, search,
   }
 
@@ -146,7 +151,7 @@ exports.listByProject = async (projectId) => {
 }
 
 exports.stats = async (currentUser) => {
-  const r = await repo.taskStats(isEmployee(currentUser) ? currentUser.id : null)
+  const r = await repo.taskStats(isRestricted(currentUser) ? currentUser.id : null)
   const pct = (n) => (r.total > 0 ? Math.round((n / r.total) * 100) : 0)
 
   return {
@@ -168,7 +173,7 @@ exports.stats = async (currentUser) => {
 // Every level in the schema CHECK is returned even at zero, so the UI renders
 // a stable set of rows instead of shifting layout.
 exports.priorityBreakdown = async (currentUser) => {
-  const rows = await repo.priorityBreakdown(isEmployee(currentUser) ? currentUser.id : null)
+  const rows = await repo.priorityBreakdown(isRestricted(currentUser) ? currentUser.id : null)
   const counts = Object.fromEntries(rows.map((r) => [r.priority, r.count]))
   const total = rows.reduce((sum, r) => sum + r.count, 0)
 
@@ -188,7 +193,7 @@ exports.upcoming = async (currentUser, { limit = 5, days = 30 } = {}) => {
   const rows = await repo.upcomingTasks({
     days: Math.min(Number(days) || 30, 365),
     limit: Math.min(Number(limit) || 5, 50),
-    scopeUserId: isEmployee(currentUser) ? currentUser.id : null,
+    scopeUserId: isRestricted(currentUser) ? currentUser.id : null,
   })
 
   const users = await identity.getUserCards(rows.map((r) => r.assignee_id))

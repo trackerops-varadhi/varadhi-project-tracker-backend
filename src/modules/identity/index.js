@@ -114,6 +114,18 @@ exports.getAccountState = async (userId) => {
   return repo.findAccountState(userId)
 }
 
+/**
+ * Invite a new account — the same path as POST /api/users/invite (invite
+ * email, admin notification). Consumed by people when a selected candidate is
+ * converted into an employee. Throws InviteError (`.status` set) for anything
+ * the caller can fix, e.g. an email that already has an account.
+ *
+ * @returns {Promise<{ id: string, email: string, role: string }>}
+ */
+exports.inviteUser = (actor, { email, role, name }) =>
+  require('./users.service').invite(actor, { email, role, name })
+exports.InviteError = require('./users.service').UserError
+
 /* ══════════════════════════════════════════════════════════════════════════ */
 /* Auth primitives                                                            */
 /* ══════════════════════════════════════════════════════════════════════════ */

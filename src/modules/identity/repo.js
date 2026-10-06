@@ -76,7 +76,8 @@ exports.userTotals = async () => {
       COUNT(CASE WHEN status = 'invited'  THEN 1 END)::int AS invited,
       COUNT(CASE WHEN role   = 'admin'    THEN 1 END)::int AS admins,
       COUNT(CASE WHEN role   = 'manager'  THEN 1 END)::int AS managers,
-      COUNT(CASE WHEN role   = 'employee' THEN 1 END)::int AS employees
+      COUNT(CASE WHEN role   = 'employee' THEN 1 END)::int AS employees,
+      COUNT(CASE WHEN role   = 'hr'       THEN 1 END)::int AS hr
     FROM users
   `)
   return rows[0]
@@ -151,11 +152,13 @@ exports.updateProfile = async (id, name, email) => {
 }
 
 exports.insertInvitedUser = async ({ name, email, role, inviteToken }) => {
-  await pool.query(
+  const { rows } = await pool.query(
     `INSERT INTO users (name, email, role, status, invite_token)
-          VALUES ($1, $2, $3, 'invited', $4)`,
+          VALUES ($1, $2, $3, 'invited', $4)
+       RETURNING id`,
     [name, email, role, inviteToken]
   )
+  return rows[0]
 }
 
 exports.updateRole = async (id, role) => {

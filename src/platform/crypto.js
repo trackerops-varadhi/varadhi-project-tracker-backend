@@ -1,5 +1,6 @@
 /**
- * Encryption at rest for integration secrets (Modules 4 & 5).
+ * Encryption at rest — platform-level since Module 9 needed it (it began as
+ * integrations' private helper for Modules 4 & 5).
  * ---------------------------------------------------------------------------
  * Two PRD business rules land here:
  *
@@ -45,8 +46,19 @@ const VERSION = 'v1' // lets a future scheme change be detected, not guessed at
 /** Distinct from notification-actions.js's `::notif-action` on purpose. */
 const DERIVATION_SALT = 'varadhi-integrations'
 
-let cachedKey
-let cachedKeySource // remembers which input produced cachedKey
+/*
+ * KEY PURPOSES. The default purpose is the integrations one described above:
+ * ENCRYPTION_KEY, else derived from JWT_SECRET. forPurpose() builds a separate
+ * suite with its own env var and salt, so one secret never protects two kinds
+ * of data. A purpose may refuse the JWT_SECRET derivation outright
+ * (allowDerived: false) — people uses that for Aadhaar, where a JWT_SECRET
+ * rotation silently destroying every stored number is not acceptable.
+ */
+const DEFAULT_PURPOSE = Object.freeze({
+  envVar: 'ENCRYPTION_KEY', salt: DERIVATION_SALT, allowDerived: true,
+})
+
+const keyCache = new Map() // purpose salt -> { source, key }
 
 /**
  * Resolve the 32-byte key, memoised.
@@ -57,13 +69,14 @@ let cachedKeySource // remembers which input produced cachedKey
  *
  * @returns {Buffer|null} null when no key material is configured at all.
  */
-function getKey() {
-  const explicit = process.env.ENCRYPTION_KEY
-  const fallback = process.env.JWT_SECRET
+function getKey(purpose = DEFAULT_PURPOSE) {
+  const explicit = process.env[purpose.envVar]
+  const fallback = purpose.allowDerived ? process.env.JWT_SECRET : undefined
   const source = explicit ? `explicit:${explicit}` : `derived:${fallback || ''}`
 
   // Memoise, but re-derive if the env changed under us (tests do this).
-  if (cachedKey && cachedKeySource === source) return cachedKey
+  const cached = keyCache.get(purpose.salt)
+  if (cached && cached.source === source) return cached.key
 
   let key = null
 
@@ -71,20 +84,19 @@ function getKey() {
     if (/^[0-9a-fA-F]{64}$/.test(explicit)) {
       key = Buffer.from(explicit, 'hex')
     } else {
-      key = crypto.scryptSync(explicit, DERIVATION_SALT, KEY_LENGTH)
+      key = crypto.scryptSync(explicit, purpose.salt, KEY_LENGTH)
     }
   } else if (fallback) {
-    key = crypto.scryptSync(fallback, DERIVATION_SALT, KEY_LENGTH)
+    key = crypto.scryptSync(fallback, purpose.salt, KEY_LENGTH)
   }
 
-  cachedKey = key
-  cachedKeySource = source
+  keyCache.set(purpose.salt, { source, key })
   return key
 }
 
 /** True when secrets can actually be protected. Callers gate storage on this. */
-function isEncryptionAvailable() {
-  return getKey() !== null
+function isEncryptionAvailable(purpose = DEFAULT_PURPOSE) {
+  return getKey(purpose) !== null
 }
 
 /**
@@ -94,13 +106,13 @@ function isEncryptionAvailable() {
  * @returns {string|null} `v1:<iv>:<authTag>:<ciphertext>` (base64url parts),
  *                        or null if there is no key or nothing to encrypt.
  */
-function encrypt(plaintext) {
+function encrypt(plaintext, purpose = DEFAULT_PURPOSE) {
   if (plaintext === null || plaintext === undefined || plaintext === '') return null
 
-  const key = getKey()
+  const key = getKey(purpose)
   if (!key) {
     console.error(
-      '[crypto] refusing to encrypt: neither ENCRYPTION_KEY nor JWT_SECRET is set. ' +
+      `[crypto] refusing to encrypt: no key for ${purpose.envVar}. ` +
       'The secret was NOT stored — storing it in plaintext is never an acceptable fallback.'
     )
     return null
@@ -139,10 +151,10 @@ function encrypt(plaintext) {
  * @param {string} blob
  * @returns {string|null}
  */
-function decrypt(blob) {
+function decrypt(blob, purpose = DEFAULT_PURPOSE) {
   if (!blob || typeof blob !== 'string') return null
 
-  const key = getKey()
+  const key = getKey(purpose)
   if (!key) return null
 
   const parts = blob.split(':')
@@ -203,15 +215,30 @@ function maskSecret(secret) {
  * needs a way to force re-derivation.
  */
 function __resetKeyCache() {
-  cachedKey = undefined
-  cachedKeySource = undefined
+  keyCache.clear()
 }
 
+/**
+ * A cipher suite for one kind of data, with its own key.
+ *
+ * @param {{ envVar: string, salt: string, allowDerived?: boolean }} purpose
+ */
+function forPurpose({ envVar, salt, allowDerived = false }) {
+  const purpose = Object.freeze({ envVar, salt, allowDerived })
+  return {
+    encrypt: (plaintext) => encrypt(plaintext, purpose),
+    decrypt: (blob) => decrypt(blob, purpose),
+    isEncryptionAvailable: () => isEncryptionAvailable(purpose),
+  }
+}
+
+// The default exports keep their one-argument call shape for integrations.
 module.exports = {
-  encrypt,
-  decrypt,
+  encrypt: (plaintext) => encrypt(plaintext),
+  decrypt: (blob) => decrypt(blob),
   maskSecret,
-  isEncryptionAvailable,
+  isEncryptionAvailable: () => isEncryptionAvailable(),
+  forPurpose,
   __resetKeyCache,
   VERSION,
 }

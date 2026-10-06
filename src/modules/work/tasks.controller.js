@@ -12,7 +12,7 @@ const { parseBaseUpdatedAt, buildConflictPayload } = require('./concurrency')
 const { TASK_CHANGED, TASK_DELETED } = events.EVENTS
 
 const {
-  isEmployee, getTaskWithDetails, notifySafely,
+  isRestricted, getTaskWithDetails, notifySafely,
   notifyAdminsAndManagers, checkProjectMilestone, REVIEW_ACTIONS,
 } = service
 
@@ -71,7 +71,7 @@ exports.getUpcomingTasks = async (req, res) => {
 exports.createTask = async (req, res) => {
   try {
     // Only Admin and Manager can create tasks.
-    if (isEmployee(req.user)) {
+    if (isRestricted(req.user)) {
       return errorResponse(res, 'You are not authorized to create tasks.', 403)
     }
 
@@ -127,7 +127,7 @@ exports.updateTask = async (req, res) => {
     // Employee can only update status — and only on a task assigned to them.
     // Mirrors the ownership rule in updateTaskStatus; without it this route is
     // an alternate way to restatus any task in the system.
-    if (isEmployee(currentUser)) {
+    if (isRestricted(currentUser)) {
       const owner = await repo.findTaskOwner(req.params.id)
       if (!owner) return errorResponse(res, 'Task not found.', 404)
       if (owner.assignee_id !== currentUser.id) {
@@ -311,7 +311,7 @@ exports.updateTaskStatus = async (req, res) => {
     const existing = await repo.findTaskOwner(req.params.id)
     if (!existing) return errorResponse(res, 'Task not found.', 404)
 
-    if (isEmployee(req.user) && existing.assignee_id !== req.user.id) {
+    if (isRestricted(req.user) && existing.assignee_id !== req.user.id) {
       return errorResponse(res, 'You are not authorized to update this task.', 403)
     }
 
@@ -347,7 +347,7 @@ exports.updateTaskStatus = async (req, res) => {
     // Admin/Manager changing status -> the affected Employee does, using the
     // more specific "review requested" type when moving it to in_review.
     await notifySafely(async () => {
-      if (isEmployee(req.user)) {
+      if (isRestricted(req.user)) {
         if (status === 'in_review') {
           // An employee submitting for review is an approval request. Same
           // recipient set as any other employee status change, but as
@@ -410,7 +410,7 @@ exports.updateTaskStatus = async (req, res) => {
 exports.deleteTask = async (req, res) => {
   try {
     // Only Admin and Manager can delete tasks.
-    if (isEmployee(req.user)) {
+    if (isRestricted(req.user)) {
       return errorResponse(res, 'You are not authorized to delete tasks.', 403)
     }
 
@@ -458,7 +458,7 @@ exports.addComment = async (req, res) => {
         })
       }
 
-      if (isEmployee(req.user)) {
+      if (isRestricted(req.user)) {
         await notifyAdminsAndManagers(
           req.user.id,
           notify.TYPES.TASK_COMMENT,

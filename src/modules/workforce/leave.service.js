@@ -19,6 +19,13 @@ const LEAVE_TYPES = ['casual', 'sick', 'earned', 'annual', 'unpaid']
 const DAY_TYPES = ['full_day', 'half_day']
 const STATUSES = ['pending', 'approved', 'rejected']
 
+// Allow-lists (Module 9). hr sees every request — HR observes and reports on
+// leave — but approving one is a line-management decision, so it is not here.
+const VIEW_ALL_ROLES = ['admin', 'manager', 'hr']
+const APPROVER_ROLES = ['admin', 'manager']
+const roleOf = (user) => String(user?.role || '').toLowerCase()
+exports.VIEW_ALL_ROLES = VIEW_ALL_ROLES
+
 // Thrown for anything the caller can fix. The controller maps `.status` onto
 // the response; anything else becomes a 500.
 class LeaveError extends Error {
@@ -60,11 +67,9 @@ const withUserCard = async (row) => {
 
 // ── reads ────────────────────────────────────────────────────────────────
 exports.listForUser = async (currentUser, { status } = {}) => {
-  // `role` is nullable in migrate.js (no NOT NULL), so a null would crash
-  // .toLowerCase(). Default to the most restrictive scope on absence.
-  const role = (currentUser.role || 'employee').toLowerCase()
+  // Any role not on the allow-list — including a null role — sees only its own.
   const rows = await repo.listLeaveRequests({
-    scopeUserId: role === 'employee' ? currentUser.id : null,
+    scopeUserId: VIEW_ALL_ROLES.includes(roleOf(currentUser)) ? null : currentUser.id,
     status: status || null,
   })
   return withUserCards(rows)
@@ -145,7 +150,7 @@ exports.create = async (currentUser, body) => {
 }
 
 exports.updateStatus = async (currentUser, id, status) => {
-  if ((currentUser.role || 'employee').toLowerCase() === 'employee') {
+  if (!APPROVER_ROLES.includes(roleOf(currentUser))) {
     throw new LeaveError('You are not authorized to update leave status.', 403)
   }
   if (!STATUSES.includes(status)) {

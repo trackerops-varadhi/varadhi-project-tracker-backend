@@ -87,11 +87,11 @@ exports.listForUser = async (currentUser, { projectId } = {}) => {
   if (!currentUser || !currentUser.id) {
     throw new TimeError('Authentication required.', 401)
   }
-  // `role` is nullable in migrate.js, so a null would crash .toLowerCase().
-  // Default to the most restrictive scope on absence.
-  const role = (currentUser.role || 'employee').toLowerCase()
+  // Allow-list (Module 9): admin, manager and hr see everyone's time; any other
+  // role — including a null one — sees only its own.
+  const role = String(currentUser.role || '').toLowerCase()
   const rows = await repo.listTimeLogs({
-    scopeUserId: role === 'employee' ? currentUser.id : null,
+    scopeUserId: ['admin', 'manager', 'hr'].includes(role) ? null : currentUser.id,
     projectId: projectId || null,
   })
   return withCards(rows)

@@ -5,8 +5,13 @@
 const work = require('../work')
 const identity = require('../identity')
 
-const isEmployee = (user) => String(user?.role || 'employee').toLowerCase() === 'employee'
-const scopeOf = (user) => (isEmployee(user) ? user.id : null)
+// ALLOW-LIST, not deny-list (Module 9). This used to ask "is this an
+// employee?", so any role that was not literally 'employee' — such as the new
+// 'hr' — fell through to manager-level access. Now only admin and manager are
+// elevated and every other role, present or future, is scoped to its own rows.
+const isRestricted = (user) =>
+  !['admin', 'manager'].includes(String(user?.role || '').toLowerCase())
+const scopeOf = (user) => (isRestricted(user) ? user.id : null)
 
 /** Headline counters. */
 exports.stats = async (currentUser) => {

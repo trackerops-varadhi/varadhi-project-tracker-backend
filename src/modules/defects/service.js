@@ -38,7 +38,12 @@ const notifySafely = async (fn) => {
   }
 }
 
-const isEmployee = (user) => String(user?.role || '').toLowerCase() === 'employee'
+// ALLOW-LIST, not deny-list (Module 9). This used to ask "is this an
+// employee?", so any role that was not literally 'employee' — such as the new
+// 'hr' — fell through to manager-level access. Now only admin and manager are
+// elevated and every other role, present or future, is scoped to its own rows.
+const isRestricted = (user) =>
+  !['admin', 'manager'].includes(String(user?.role || '').toLowerCase())
 const isManagerOrAdmin = (user) =>
   ['admin', 'manager'].includes(String(user?.role || '').toLowerCase())
 
@@ -185,7 +190,7 @@ async function listBugs(user, query = {}) {
   }
 
   const spec = {
-    scopeUserId: isEmployee(user) ? user.id : null,
+    scopeUserId: isRestricted(user) ? user.id : null,
     search: searchSpec,
     inFilters: {
       'b.status': listOf(status, BUG_STATUSES),
@@ -303,7 +308,7 @@ async function getComments(bugId) {
  * bypass the list endpoint's scoping.
  */
 function canView(user, bug) {
-  if (!isEmployee(user)) return true
+  if (!isRestricted(user)) return true
   return bug.assignee?.id === user.id || bug.reporter?.id === user.id
 }
 
@@ -494,7 +499,7 @@ async function applyStatusChange(user, bug, nextStatus, { resolution, rootCause,
     if (updated.assignee?.id) recipients.add(updated.assignee.id)
     if (updated.reporter?.id) recipients.add(updated.reporter.id)
 
-    if (isEmployee(user)) {
+    if (isRestricted(user)) {
       for (const id of await identity.getActiveUserIdsByRoles(['admin', 'manager'])) {
         recipients.add(id)
       }
@@ -651,7 +656,7 @@ module.exports = {
   parseBugKey,
   canView,
   canEdit,
-  isEmployee,
+  isRestricted,
   isManagerOrAdmin,
   notifySafely,
   SLA_STATUS,

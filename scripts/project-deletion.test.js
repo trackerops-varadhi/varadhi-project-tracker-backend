@@ -55,7 +55,7 @@ const { identity, work, defects, integrations, files, workforce, notify, endAll 
   require('./test-pools')
 const { authHeaders } = require('./test-auth')
 const { resolveTarget } = require('../src/config/migrate-runner')
-const { encrypt } = require('../src/modules/integrations/crypto')
+const { encrypt } = require('../src/platform/crypto')
 
 const API = process.env.TEST_API_BASE || 'http://127.0.0.1:5000/api'
 

@@ -32,7 +32,7 @@ const {
   NOTIFICATION_TYPES,
 } = require('../notify')
 const { resolveProvider } = require('./calendar-providers')
-const { decrypt, encrypt } = require('./crypto')
+const { decrypt, encrypt } = require('../../platform/crypto')
 
 const APP_URL =
   process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000'

@@ -28,7 +28,7 @@ const {
   logBugActivity,
 } = require('./workflow')
 
-const { notifySafely, isEmployee, isManagerOrAdmin } = service
+const { notifySafely, isRestricted, isManagerOrAdmin } = service
 
 /* -------------------------------------------------------------------------- */
 /* Validation helpers                                                         */
@@ -201,7 +201,7 @@ exports.createBug = async (req, res) => {
     // Defence in depth. The route already refuses employees, so this can only
     // fire if that guard is ever removed — assignment must never become
     // reachable by an employee through the create path.
-    if (assigneeId && isEmployee(req.user)) {
+    if (assigneeId && isRestricted(req.user)) {
       return errorResponse(res, 'You are not authorized to assign bugs.', 403)
     }
 
@@ -272,7 +272,7 @@ exports.updateBug = async (req, res) => {
 
     // An employee editing a bug is limited to the fix-documentation fields,
     // even on a bug they reported — re-triaging severity is a manager call.
-    if (isEmployee(req.user)) {
+    if (isRestricted(req.user)) {
       const forbidden = provided.filter((f) => !EMPLOYEE_EDITABLE_FIELDS.has(f))
       if (forbidden.length) {
         return errorResponse(res, `You are not authorized to change: ${forbidden.join(', ')}.`, 403)
@@ -430,7 +430,7 @@ exports.updateStatus = async (req, res) => {
     // An employee drives the development side of the flow on a bug assigned to
     // them; closing, rejecting and reopening are triage and verification
     // decisions reserved for admin/manager.
-    if (isEmployee(req.user)) {
+    if (isRestricted(req.user)) {
       if (bug.assignee?.id !== req.user.id) {
         return errorResponse(res, 'You can only update bugs assigned to you.', 403)
       }
@@ -470,7 +470,7 @@ exports.updateStatus = async (req, res) => {
 exports.assignBug = async (req, res) => {
   try {
     // Assignment is a triage decision — admin/manager only.
-    if (isEmployee(req.user)) {
+    if (isRestricted(req.user)) {
       return errorResponse(res, 'You are not authorized to assign bugs.', 403)
     }
 
@@ -518,7 +518,7 @@ const TASK_PRIORITY = { p0: 'critical', p1: 'high', p2: 'medium', p3: 'low' }
  */
 exports.createTaskFromBug = async (req, res) => {
   try {
-    if (isEmployee(req.user)) {
+    if (isRestricted(req.user)) {
       return errorResponse(res, 'You are not authorized to create tasks.', 403)
     }
 

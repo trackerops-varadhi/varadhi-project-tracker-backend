@@ -18,7 +18,7 @@ const { identity, integrations, notify, work } = require('./test-pools')
 const cards = require('../src/modules/integrations/teams-cards')
 const delivery = require('../src/modules/integrations/teams-delivery')
 const fanout = require('../src/modules/integrations/teams-fanout')
-const { encrypt, maskSecret } = require('../src/modules/integrations/crypto')
+const { encrypt, maskSecret } = require('../src/platform/crypto')
 const { __internals } = require('../src/modules/integrations/teams.controller')
 
 let pass = 0, fail = 0

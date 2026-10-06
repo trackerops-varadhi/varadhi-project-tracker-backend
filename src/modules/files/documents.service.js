@@ -9,7 +9,12 @@ const work = require('../work')
 const notify = require('../notify')
 const { FilesError } = require('./errors')
 
-const isEmployee = (user) => String(user?.role || '').toLowerCase() === 'employee'
+// ALLOW-LIST, not deny-list (Module 9). This used to ask "is this an
+// employee?", so any role that was not literally 'employee' — such as the new
+// 'hr' — fell through to manager-level access. Now only admin and manager are
+// elevated and every other role, present or future, is scoped to its own rows.
+const isRestricted = (user) =>
+  !['admin', 'manager'].includes(String(user?.role || '').toLowerCase())
 
 // Notifications must never turn a successful action into a 500, so every
 // dispatch runs inside this guard rather than the caller's try/catch.
@@ -63,7 +68,7 @@ exports.list = async (_currentUser, { folderId } = {}) => {
 }
 
 exports.getDownloadUrl = async (currentUser, id) => {
-  if (isEmployee(currentUser)) {
+  if (isRestricted(currentUser)) {
     throw new FilesError('You are not authorized to download documents.', 403)
   }
 
@@ -134,7 +139,7 @@ exports.upload = async (currentUser, file, { description, projectId, folderId } 
 }
 
 exports.move = async (currentUser, id, { folderId } = {}) => {
-  if (isEmployee(currentUser)) {
+  if (isRestricted(currentUser)) {
     throw new FilesError('You are not authorized to move documents.', 403)
   }
 
@@ -148,7 +153,7 @@ exports.move = async (currentUser, id, { folderId } = {}) => {
 }
 
 exports.remove = async (currentUser, id) => {
-  if (isEmployee(currentUser)) {
+  if (isRestricted(currentUser)) {
     throw new FilesError('You are not authorized to delete documents.', 403)
   }
 
