@@ -58,9 +58,11 @@ exports.insertLeaveRequest = async ({
 exports.updateLeaveStatus = async (id, status, approverId = null) => {
   const { rows } = await pool.query(
     `UPDATE leave_requests
-        SET status = $1,
+        SET status = $1::varchar,
             approver_id = $3,
-            approved_at = CASE WHEN $1 = 'approved' THEN NOW() ELSE NULL END
+            -- Same parameter twice: cast both uses, or Postgres cannot deduce
+            -- one type for $1 ("inconsistent types deduced for parameter").
+            approved_at = CASE WHEN $1::varchar = 'approved' THEN NOW() ELSE NULL END
       WHERE id = $2 AND status <> 'cancelled'
       RETURNING *`,
     [status, id, approverId]
