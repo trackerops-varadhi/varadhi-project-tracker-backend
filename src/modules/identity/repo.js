@@ -77,7 +77,8 @@ exports.userTotals = async () => {
       COUNT(CASE WHEN role   = 'admin'    THEN 1 END)::int AS admins,
       COUNT(CASE WHEN role   = 'manager'  THEN 1 END)::int AS managers,
       COUNT(CASE WHEN role   = 'employee' THEN 1 END)::int AS employees,
-      COUNT(CASE WHEN role   = 'hr'       THEN 1 END)::int AS hr
+      COUNT(CASE WHEN role   = 'hr'       THEN 1 END)::int AS hr,
+      COUNT(CASE WHEN role   = 'qc'       THEN 1 END)::int AS qc
     FROM users
   `)
   return rows[0]

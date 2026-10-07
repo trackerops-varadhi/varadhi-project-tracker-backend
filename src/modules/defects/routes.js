@@ -12,6 +12,10 @@ const { protect, restrictTo } = require('../../middleware/auth.middleware')
 const upload = require('../../middleware/upload')
 
 router.use(protect)
+// The Bugs Finder is QC's workspace (role workspaces). Admin and qc only —
+// developers work their bugs through the linked task in their task list, so
+// employees and managers have no reason to reach this API at all.
+router.use(restrictTo('admin', 'qc'))
 
 // ─── Static paths first ───────────────────────────────────────────────────────
 // Express matches in order, so these must precede '/:id' or they are swallowed
@@ -19,7 +23,7 @@ router.use(protect)
 router.get('/options', ctrl.getOptions)
 // Defect metrics feed the Reports page, which is admin/manager-only in the
 // sidebar. Same boundary here.
-router.get('/reports', restrictTo('admin', 'manager'), ctrl.getReports)
+router.get('/reports', ctrl.getReports)
 router.get('/sla-rules', ctrl.getSlaRules)
 // Editing an SLA target changes a team-wide commitment — admin only.
 router.put('/sla-rules/:severity', restrictTo('admin'), ctrl.updateSlaRule)
@@ -30,7 +34,7 @@ router.get('/', ctrl.getAllBugs)
 // employee has no create-or-assign access anywhere in the tracker. Reporting a
 // bug creates an assignable work item with an SLA attached, so it belongs on
 // the same side of that line rather than being the one exception.
-router.post('/', restrictTo('admin', 'manager'), ctrl.createBug)
+router.post('/', ctrl.createBug)
 
 // ─── Single bug ───────────────────────────────────────────────────────────────
 router.get('/:id', ctrl.getBugById)
@@ -42,10 +46,10 @@ router.get('/:id/activity', ctrl.getActivity)
 // Workflow. Row-level rules (assignee-only for employees, which statuses each
 // role may set) are enforced in the controller.
 router.patch('/:id/status', ctrl.updateStatus)
-router.patch('/:id/assign', restrictTo('admin', 'manager'), ctrl.assignBug)
+router.patch('/:id/assign', ctrl.assignBug)
 
 // Task integration.
-router.post('/:id/task', restrictTo('admin', 'manager'), ctrl.createTaskFromBug)
+router.post('/:id/task', ctrl.createTaskFromBug)
 
 // Comments.
 router.get('/:id/comments', ctrl.getComments)

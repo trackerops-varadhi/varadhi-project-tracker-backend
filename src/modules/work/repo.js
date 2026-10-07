@@ -371,6 +371,32 @@ exports.insertBugTask = async ({
 }
 
 /**
+ * Update the fields defects keeps in step on a bug's linked task. `fields`
+ * carries only the keys to change; completed_at follows the status.
+ * Returns the updated row, or null when the task no longer exists.
+ */
+exports.updateBugTaskFields = async (id, { assigneeId, status } = {}) => {
+  const sets = []
+  const params = [id]
+  if (assigneeId !== undefined) {
+    params.push(assigneeId)
+    sets.push(`assignee_id = $${params.length}`)
+  }
+  if (status !== undefined) {
+    params.push(status)
+    sets.push(`status = $${params.length}`)
+    sets.push(`completed_at = CASE WHEN $${params.length}::varchar = 'completed'
+                                   THEN COALESCE(completed_at, NOW()) ELSE NULL END`)
+  }
+  if (sets.length === 0) return null
+  const { rows } = await pool.query(
+    `UPDATE tasks SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1 RETURNING id, status`,
+    params
+  )
+  return rows[0] || null
+}
+
+/**
  * Compare-and-swap a task's status: move `id` from `fromStatus` to `toStatus`,
  * and do nothing at all if it is not currently in `fromStatus`.
  *

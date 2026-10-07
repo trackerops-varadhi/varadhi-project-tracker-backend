@@ -158,6 +158,26 @@ exports.createTaskForBug = async ({
   return row.id
 }
 
+/**
+ * Keep a bug's linked task in step with the bug: its assignee and/or status.
+ *
+ * Narrow on purpose — defects may move the task it created for a bug, never
+ * retitle or re-scope it. Emits TASK_CHANGED with source 'defects' so the
+ * calendar still re-syncs, while defects' own subscriber knows to ignore it.
+ *
+ * @param {string} taskId
+ * @param {{ assigneeId?: string|null, status?: 'todo'|'in_progress'|'in_review'|'completed' }} fields
+ */
+exports.updateBugTask = async (taskId, fields = {}) => {
+  const allowed = ['todo', 'in_progress', 'in_review', 'completed']
+  if (fields.status !== undefined && !allowed.includes(fields.status)) {
+    throw new Error(`updateBugTask: invalid status "${fields.status}"`)
+  }
+  const row = await repo.updateBugTaskFields(taskId, fields)
+  if (row) await events.emit(events.EVENTS.TASK_CHANGED, { taskId, status: row.status, source: 'defects' })
+  return Boolean(row)
+}
+
 /* ── Behaviour other modules trigger ────────────────────────────────────── */
 
 /* ── Domain events ──────────────────────────────────────────────────────── */
@@ -229,7 +249,7 @@ exports.applyTaskStatusTransition = async ({ taskId, fromStatus, toStatus }) => 
     return { applied: false, status: null, currentStatus: ctx ? ctx.status : null }
   }
 
-  await events.emit(events.EVENTS.TASK_CHANGED, { taskId })
+  await events.emit(events.EVENTS.TASK_CHANGED, { taskId, status: swapped.status })
 
   return { applied: true, status: swapped.status, currentStatus: swapped.status }
 }

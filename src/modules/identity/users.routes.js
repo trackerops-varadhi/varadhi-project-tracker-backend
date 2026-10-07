@@ -4,8 +4,9 @@ const { protect, restrictTo } = require('../../middleware/auth.middleware')
 
 router.use(protect)
 
-// hr reads the roster (Module 9) but never invites, re-roles or deactivates.
-router.get('/', restrictTo('admin', 'manager', 'hr'), ctrl.getAllUsers)
+// hr reads the roster (Module 9), and qc reads it to assign bugs to
+// developers; neither invites, re-roles or deactivates.
+router.get('/', restrictTo('admin', 'manager', 'hr', 'qc'), ctrl.getAllUsers)
 router.put('/profile', ctrl.updateProfile)
 router.post('/invite', restrictTo('admin'), ctrl.inviteUser)
 // Must precede '/:id' so 'stats' is not parsed as a user id.

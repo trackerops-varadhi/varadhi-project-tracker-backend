@@ -32,6 +32,7 @@ router.get('/:id/tasks', tasksCtrl.getTasksByProject)
 // The Bugs tab. Paginated and role-scoped by the same service /api/bugs uses,
 // so it cannot widen visibility. Reached through the defects module's public
 // interface — still a cross-domain edge, but no longer a deep import.
-router.get('/:id/bugs', (req, res, next) => defects().projectBugsHandler(req, res, next))
+// Role workspaces: bugs are QC's, so only admin and qc reach this tab.
+router.get('/:id/bugs', restrictTo('admin', 'qc'), (req, res, next) => defects().projectBugsHandler(req, res, next))
 
 module.exports = router

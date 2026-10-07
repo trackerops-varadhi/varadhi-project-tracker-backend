@@ -291,7 +291,7 @@ exports.updateTask = async (req, res) => {
     // minutes. work does not know that — it says the task changed, and the
     // subscriber decides what that means. Awaited and self-guarding, so a
     // failing subscriber can never fail the request.
-    await events.emit(TASK_CHANGED, { taskId: req.params.id })
+    await events.emit(TASK_CHANGED, { taskId: req.params.id, status: task?.status, actorId: req.user.id })
 
     return successResponse(res, task, 'Task updated.')
   } catch (err) {
@@ -401,7 +401,7 @@ exports.updateTaskStatus = async (req, res) => {
     // reaped; any other transition just needs a re-push. Both are the same
     // announcement — the task changed — so this never duplicates the sync
     // engine's scoping rules.
-    await events.emit(TASK_CHANGED, { taskId: req.params.id })
+    await events.emit(TASK_CHANGED, { taskId: req.params.id, status, actorId: req.user.id })
 
     return successResponse(res, task, 'Status updated.')
   } catch (err) { return errorResponse(res, err.message, 500) }

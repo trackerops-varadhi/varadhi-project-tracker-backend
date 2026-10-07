@@ -57,9 +57,14 @@ async function getTasksWithDetails(taskIds) {
   const ids = (taskIds || []).filter(Boolean)
   if (ids.length === 0) return []
 
-  const [rows, commentsByTask] = await Promise.all([
+  const [rows, commentsByTask, bugsByTask] = await Promise.all([
     repo.findTaskRows(ids),
     repo.findCommentsForTasks(ids),
+    // Role workspaces: a task created for a bug carries that bug's details, so
+    // the developer sees severity, steps and attachments without the Bugs
+    // module. Lazy require — defects depends on work, not the other way round
+    // at load time.
+    require('../defects').getBugCardsForTasks(ids),
   ])
   if (rows.length === 0) return []
 
@@ -73,7 +78,7 @@ async function getTasksWithDetails(taskIds) {
   return ids
     .map((id) => byId.get(id))
     .filter(Boolean)
-    .map((t) => shapeTask(t, commentsByTask.get(t.id) || [], users))
+    .map((t) => ({ ...shapeTask(t, commentsByTask.get(t.id) || [], users), bug: bugsByTask.get(t.id) ?? null }))
 }
 
 /** Row + its comments + a card map -> the API shape. */

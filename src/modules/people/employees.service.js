@@ -255,7 +255,7 @@ exports.createEmployee = async (currentUser, body = {}) => {
       type: notify.TYPES.EMPLOYEE_PROFILE_INCOMPLETE,
       title: 'Complete your employee profile',
       message: `HR added your employee profile. Please add your ${missing.join(' and ')}.`,
-      linkTo: '/directory?tab=me',
+      linkTo: '/settings?tab=hr-profile',
       priority: 'low',
     }))
   }

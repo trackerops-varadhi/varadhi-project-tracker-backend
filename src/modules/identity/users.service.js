@@ -114,8 +114,9 @@ exports.updateProfile = async (currentUser, { name, email }) => {
 
 /* ── Administration ─────────────────────────────────────────────────────── */
 
-// 'hr' (Module 9) can be granted here, but invite/role/deactivate stay admin-only.
-const VALID_ROLES = ['admin', 'manager', 'employee', 'hr']
+// 'hr' (Module 9) and 'qc' (Bugs Finder owner) can be granted here; invite,
+// role change and deactivate stay admin-only.
+const VALID_ROLES = ['admin', 'manager', 'employee', 'hr', 'qc']
 
 // `name` is optional: the Users screen invites by email alone, while people's
 // candidate conversion already knows the person's name.

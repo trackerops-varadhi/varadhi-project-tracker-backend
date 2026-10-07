@@ -223,14 +223,17 @@ async function main() {
     check('hr reveals the full number', reveal.data?.aadhaar === '2345 6789 0123', JSON.stringify(reveal.body))
   }
 
-  console.log('\n5. /team is PII-free and open to every role')
+  console.log('\n5. /team is PII-free and part of the HR workspace')
   {
     // Fill PII on emp2 so a leak would actually show.
     await api('PUT', `/people/employees/${emp2.id}`, hr.id, {
       dateOfBirth: '1990-01-01', guardianName: 'ZZ Guardian', maritalStatus: 'single',
     })
-    const team = await api('GET', '/people/team', emp.id)
-    check('employee can read /team', team.status === 200, `got ${team.status}`)
+    // Role workspaces: Team Directory belongs to admin and HR.
+    check('employee cannot read /team (403)', (await api('GET', '/people/team', emp.id)).status === 403)
+    check('manager cannot read /team (403)', (await api('GET', '/people/team', manager.id)).status === 403)
+    const team = await api('GET', '/people/team', hr.id)
+    check('hr can read /team', team.status === 200, `got ${team.status}`)
     const forbidden = ['temporaryAddress', 'permanentAddress', 'aadhaarMasked', 'hasAadhaar', 'dateOfBirth',
       'age', 'guardianName', 'maritalStatus', 'gender', 'reasonCategory', 'reasonDetail', 'exit']
     check('payload has none of the PII keys', !hasKeyDeep(team.body, forbidden))
@@ -282,7 +285,7 @@ async function main() {
     check('past last day → exited', after.data?.status === 'exited', after.data?.status)
     const active = await api('GET', '/people/employees?status=active&limit=100', hr.id)
     check('leaves the active directory', !active.data?.items?.some((e) => e.userId === emp.id))
-    const team = await api('GET', '/people/team', emp2.id)
+    const team = await api('GET', '/people/team', hr.id)
     check('leaves the team directory', !JSON.stringify(team.data).includes(emp.id))
     const an = await api('GET', `/people/exits/analytics?from=${addDays(today, -30)}&to=${today}`, manager.id)
     check('appears in attrition analytics', an.data?.byReason?.some((x) => x.key === 'compensation' && x.count >= 1))

@@ -4,8 +4,8 @@
  * Runs every 5 minutes and does two things:
  *
  *   1. At risk  — a live bug has burned through its configured fraction of the
- *                 resolution window. Warns the assignee (and the project
- *                 manager) once, latched by sla_at_risk_notified_at.
+ *                 resolution window. Warns the assignee (via their task) and
+ *                 the reporter once, latched by sla_at_risk_notified_at.
  *   2. Breached — the resolution deadline has passed with no resolution.
  *                 Latches sla_breached so the record keeps the breach even
  *                 after the bug is eventually fixed, logs it to the bug's
@@ -19,14 +19,16 @@
  * did it as `UPDATE bugs b FROM projects p ... p.id IS NOT DISTINCT FROM
  * b.project_id`, which silently excluded bugs with no project and needed a
  * second "orphans" statement to compensate. The join is gone: one UPDATE now
- * latches every breached bug regardless of project, and manager ids are
- * resolved afterwards in one batched work.getProjectManagerIds() call.
+ * latches every breached bug regardless of project.
+ *
+ * ROLE WORKSPACES: project managers are no longer told — the Bugs Finder is
+ * QC's. The assignee is warned with a link to their linked task, the reporter
+ * and (for critical breaches) the admin/qc leads with a link to the bug.
  */
 
 const cron = require('node-cron')
 
 const repo = require('./repo')
-const work = require('../work')
 const identity = require('../identity')
 const notify = require('../notify')
 const { formatSlaRemaining } = require('./sla')
@@ -55,20 +57,29 @@ async function sweepAtRisk() {
   const rows = await repo.findAtRiskBugs(200)
   if (rows.length === 0) return { scanned: 0, sent: 0 }
 
-  // One batched lookup for the whole sweep, replacing the per-row LEFT JOIN.
-  const managers = await work.getProjectManagerIds(rows.map((r) => r.project_id))
-
   let sent = 0
   for (const row of rows) {
     const key = `BUG-${row.bug_number}`
     const remaining = formatSlaRemaining(new Date(row.sla_resolution_due_at) - Date.now())
 
-    const managerId = managers.get(row.project_id) || null
-    const recipients = [row.assignee_id, managerId].filter(Boolean)
-
-    if (recipients.length) {
-      await notify.dispatchToUsers({
-        userIds: recipients,
+    // The developer works the bug through its task, so their warning links
+    // there; the reporter (QC) gets the bug itself. Project managers no longer
+    // use the Bugs module.
+    if (row.assignee_id) {
+      await notify.dispatch({
+        userId: row.assignee_id,
+        type: notify.TYPES.BUG_SLA_AT_RISK,
+        title: 'Bug SLA at risk',
+        message: `${key} "${row.title}" — ${remaining}.`,
+        linkTo: row.linked_task_id ? `/tasks/${row.linked_task_id}` : '/tasks',
+        priority: 'high',
+        dedupeWindowMinutes: WINDOWS.atRisk,
+      })
+      sent += 1
+    }
+    if (row.reporter_id && row.reporter_id !== row.assignee_id) {
+      await notify.dispatch({
+        userId: row.reporter_id,
         type: notify.TYPES.BUG_SLA_AT_RISK,
         title: 'Bug SLA at risk',
         message: `${key} "${row.title}" — ${remaining}.`,
@@ -76,7 +87,6 @@ async function sweepAtRisk() {
         priority: 'high',
         dedupeWindowMinutes: WINDOWS.atRisk,
       })
-      sent += 1
     }
 
     await logBugActivity({
@@ -104,13 +114,11 @@ async function sweepBreached() {
   const breached = await repo.latchBreachedBugs()
   if (breached.length === 0) return { scanned: 0, sent: 0 }
 
-  const managers = await work.getProjectManagerIds(breached.map((r) => r.project_id))
-
   // Resolved once for the whole sweep rather than per critical bug, which is
-  // what the legacy version did inside the loop.
+  // what the legacy version did inside the loop. Bug leads are admin and qc.
   let leadIds = null
   const getLeadIds = async () => {
-    if (leadIds === null) leadIds = await identity.getActiveUserIdsByRoles(['admin', 'manager'])
+    if (leadIds === null) leadIds = await identity.getActiveUserIdsByRoles(['admin', 'qc'])
     return leadIds
   }
 
@@ -119,13 +127,25 @@ async function sweepBreached() {
     const key = `BUG-${row.bug_number}`
     const overdueBy = formatSlaRemaining(new Date(row.sla_resolution_due_at) - Date.now())
 
-    const managerId = managers.get(row.project_id) || null
-    const recipients = new Set([row.assignee_id, row.reporter_id, managerId].filter(Boolean))
+    // The assignee is told separately, with a link to their task.
+    const recipients = new Set([row.reporter_id].filter(Boolean))
 
-    // A breached critical defect goes to every admin/manager, not just the
-    // project's own manager — that is the escalation path.
+    // A breached critical defect goes to every bug lead (admin/qc) — that is
+    // the escalation path.
     if (row.severity === 'critical') {
       for (const id of await getLeadIds()) recipients.add(id)
+    }
+    if (row.assignee_id) {
+      recipients.delete(row.assignee_id)
+      await notify.dispatch({
+        userId: row.assignee_id,
+        type: notify.TYPES.BUG_SLA_BREACHED,
+        title: 'Bug SLA breached',
+        message: `${key} "${row.title}" has missed its ${row.severity} resolution SLA — ${overdueBy}.`,
+        linkTo: row.linked_task_id ? `/tasks/${row.linked_task_id}` : '/tasks',
+        priority: 'urgent',
+        dedupeWindowMinutes: WINDOWS.breach,
+      })
     }
 
     if (recipients.size) {

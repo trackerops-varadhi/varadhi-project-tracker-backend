@@ -16,8 +16,10 @@ router.use(protect)
 router.get('/dashboard', restrictTo(...HR_AND_MANAGERS),
   handler(() => dashboard.getDashboard(), { where: 'dashboard', fallback: 'Failed to load HR dashboard.' }))
 
-// All roles. PII-free by construction (employees.service#getTeamDirectory).
-router.get('/team',
+// Role workspaces: the Team Directory is part of the HR workspace (and
+// admin's), not the manager or employee ones. Still PII-free by construction
+// (employees.service#getTeamDirectory).
+router.get('/team', restrictTo(...HR),
   handler(() => service.getTeamDirectory(), { where: 'team', fallback: 'Failed to load the team directory.' }))
 
 router.get('/me',

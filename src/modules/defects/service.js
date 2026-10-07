@@ -24,6 +24,7 @@ const {
   ENVIRONMENTS,
 } = require('./sla')
 const { BUG_STATUSES, STATUS_LABELS, BUG_ACTIONS, logBugActivity } = require('./workflow')
+const taskSync = require('./task-sync')
 
 /* -------------------------------------------------------------------------- */
 /* Helpers                                                                    */
@@ -38,14 +39,17 @@ const notifySafely = async (fn) => {
   }
 }
 
-// ALLOW-LIST, not deny-list (Module 9). This used to ask "is this an
-// employee?", so any role that was not literally 'employee' — such as the new
-// 'hr' — fell through to manager-level access. Now only admin and manager are
-// elevated and every other role, present or future, is scoped to its own rows.
-const isRestricted = (user) =>
-  !['admin', 'manager'].includes(String(user?.role || '').toLowerCase())
+// The Bugs Finder belongs to QC (role workspaces). Admin and qc are the bug
+// leads: they create, assign, verify, close and reopen. Every other role is
+// restricted — and in practice never reaches here, because routes.js admits
+// only admin and qc. Developers work their bugs through the linked task.
+//
+// ALLOW-LIST, not deny-list (Module 9): any role not named here, present or
+// future, gets the restricted behaviour.
+const BUG_LEAD_ROLES = ['admin', 'qc']
 const isManagerOrAdmin = (user) =>
-  ['admin', 'manager'].includes(String(user?.role || '').toLowerCase())
+  BUG_LEAD_ROLES.includes(String(user?.role || '').toLowerCase())
+const isRestricted = (user) => !isManagerOrAdmin(user)
 
 /** "BUG-1042" from the sequential bug_number. */
 const formatBugKey = (bugNumber) => `BUG-${bugNumber}`
@@ -383,6 +387,8 @@ async function createBug(user, input) {
     client.release()
   }
 
+  // An assigned bug lands in the developer's task list straight away.
+  const taskId = await taskSync.ensureTask(await getBugById(bugId), user.id)
   const bug = await getBugById(bugId)
 
   await notifySafely(async () => {
@@ -392,16 +398,16 @@ async function createBug(user, input) {
         type: notify.TYPES.BUG_ASSIGNED,
         title: 'Bug assigned to you',
         message: `${bug.key}: ${title} (${severity} severity, due ${formatSlaRemaining(bug.sla.remainingMs)})`,
-        linkTo: `/bugs/${bugId}`,
+        // Developers work bugs from their task list, not the Bugs module.
+        linkTo: taskId ? `/tasks/${taskId}` : '/tasks',
         priority: severity === 'critical' ? 'urgent' : 'high',
       })
     }
 
-    // A critical defect is escalated to every admin/manager the moment it is
-    // filed — the same "managers need to know" rule tasks applies to bug-type
-    // tasks and critical priority.
+    // A critical defect is escalated to every bug lead (admin/qc) the moment
+    // it is filed.
     if (severity === 'critical' || priority === 'p0') {
-      const leadIds = await identity.getActiveUserIdsByRoles(['admin', 'manager'])
+      const leadIds = await identity.getActiveUserIdsByRoles(BUG_LEAD_ROLES)
       await notify.dispatchToUsers({
         userIds: leadIds,
         type: notify.TYPES.BUG_CRITICAL_REPORTED,
@@ -422,7 +428,7 @@ async function createBug(user, input) {
  * (which owns the 400); this applies the side effects: first-response stamping,
  * resolution/close timestamps, reopen counting and the SLA restart on a reopen.
  */
-async function applyStatusChange(user, bug, nextStatus, { resolution, rootCause, duplicateOfId } = {}) {
+async function applyStatusChange(user, bug, nextStatus, { resolution, rootCause, duplicateOfId, source } = {}) {
   const previous = bug.status
   const now = new Date()
 
@@ -490,20 +496,25 @@ async function applyStatusChange(user, bug, nextStatus, { resolution, rootCause,
     await logBugActivity({ bugId: bug.id, actorId: user.id, action: BUG_ACTIONS.RESOLVED })
   }
 
+  // Keep the developer's task in step — unless the task is what moved.
+  if (source !== 'task') await taskSync.pushStatus(await getBugById(bug.id))
+
   const updated = await getBugById(bug.id)
 
   await notifySafely(async () => {
-    // Who cares about this transition: the assignee, the reporter, and — when
-    // an employee moves it — the admins/managers who have no other visibility.
+    // Who cares about this transition: the reporter, and — when a developer
+    // moved it through their task — the bug leads (admin/qc), who verify it.
+    // The assignee is told separately below, with a link to their task.
     const recipients = new Set()
-    if (updated.assignee?.id) recipients.add(updated.assignee.id)
     if (updated.reporter?.id) recipients.add(updated.reporter.id)
 
     if (isRestricted(user)) {
-      for (const id of await identity.getActiveUserIdsByRoles(['admin', 'manager'])) {
+      for (const id of await identity.getActiveUserIdsByRoles(BUG_LEAD_ROLES)) {
         recipients.add(id)
       }
     }
+    const assigneeId = updated.assignee?.id
+    if (assigneeId) recipients.delete(assigneeId)
 
     const type =
       nextStatus === 'reopened' ? notify.TYPES.BUG_REOPENED
@@ -513,17 +524,38 @@ async function applyStatusChange(user, bug, nextStatus, { resolution, rootCause,
     const title =
       nextStatus === 'reopened' ? 'Bug reopened'
         : nextStatus === 'closed' ? 'Bug closed'
+        : nextStatus === 'fixed' ? 'Bug fixed — ready for QA verification'
         : 'Bug status updated'
+
+    const message = `${updated.key} "${updated.title}" is now ${STATUS_LABELS[nextStatus]}`
+    const priority = nextStatus === 'reopened' ? 'high' : 'normal'
+    // Every transition is its own event. The default 5-minute dedupe (same
+    // user, type and link) would swallow "fixed" right after "in progress" —
+    // exactly the notice QC needs to start verifying.
+    const skipDedupe = true
 
     await notify.dispatchToUsers({
       userIds: [...recipients],
       type,
       title,
-      message: `${updated.key} "${updated.title}" is now ${STATUS_LABELS[nextStatus]}`,
+      message,
       linkTo: `/bugs/${bug.id}`,
-      priority: nextStatus === 'reopened' ? 'high' : 'normal',
+      priority,
       excludeUserId: user.id,
+      skipDedupe,
     })
+
+    if (assigneeId && assigneeId !== user.id) {
+      await notify.dispatch({
+        userId: assigneeId,
+        type,
+        title,
+        message,
+        linkTo: updated.linkedTask?.id ? `/tasks/${updated.linkedTask.id}` : '/tasks',
+        priority,
+        skipDedupe,
+      })
+    }
   })
 
   return updated
@@ -563,6 +595,9 @@ async function assignBug(user, bug, assigneeId) {
     })
   }
 
+  // The linked task follows the bug: created on first assignment, handed to
+  // the new assignee on a reassignment.
+  const taskId = await taskSync.ensureTask(await getBugById(bug.id), user.id)
   const updated = await getBugById(bug.id)
 
   await notifySafely(async () => {
@@ -572,7 +607,7 @@ async function assignBug(user, bug, assigneeId) {
       type: previousAssigneeId ? notify.TYPES.BUG_REASSIGNED : notify.TYPES.BUG_ASSIGNED,
       title: previousAssigneeId ? 'Bug reassigned to you' : 'Bug assigned to you',
       message: `${updated.key}: ${updated.title} (${updated.severity} severity)`,
-      linkTo: `/bugs/${bug.id}`,
+      linkTo: taskId ? `/tasks/${taskId}` : '/tasks',
       priority: updated.severity === 'critical' ? 'urgent' : 'high',
     })
   })
@@ -643,6 +678,7 @@ async function getReportMetrics({ projectId, dateFrom, dateTo } = {}) {
 }
 
 module.exports = {
+  BUG_LEAD_ROLES,
   listBugs,
   getBugById,
   getActivity,

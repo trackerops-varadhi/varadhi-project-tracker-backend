@@ -507,6 +507,7 @@ exports.findAtRiskBugs = async (limit = 200) => {
   // it takes effect on the next tick without a code change.
   const { rows } = await pool.query(
     `SELECT b.id, b.bug_number, b.title, b.severity, b.assignee_id, b.project_id,
+            b.reporter_id, b.linked_task_id,
             b.sla_resolution_due_at
        FROM bugs b
       WHERE b.status IN ${SWEEP_LIVE_STATUSES}
@@ -549,7 +550,46 @@ exports.latchBreachedBugs = async () => {
         AND sla_resolution_due_at IS NOT NULL
         AND sla_resolution_due_at < NOW()
       RETURNING id, bug_number, title, severity, assignee_id, reporter_id,
-                project_id, sla_resolution_due_at`
+                project_id, linked_task_id, sla_resolution_due_at`
+  )
+  return rows
+}
+
+/* ── Bug ↔ task link (role workspaces) ──────────────────────────────────── */
+//
+// An assigned bug is worked through its linked task: developers see it in
+// their task list rather than in the Bugs module, which belongs to QC.
+
+exports.findBugIdByLinkedTask = async (taskId) => {
+  const { rows } = await pool.query('SELECT id FROM bugs WHERE linked_task_id = $1 LIMIT 1', [taskId])
+  return rows[0]?.id ?? null
+}
+
+// A deleted task leaves its bug unlinked (no cross-schema FK does it for us).
+exports.unlinkTask = async (taskId) => {
+  const { rowCount } = await pool.query(
+    'UPDATE bugs SET linked_task_id = NULL, updated_at = NOW() WHERE linked_task_id = $1', [taskId])
+  return rowCount
+}
+
+/** The bug behind each task id — what the task list shows as a bug badge. */
+exports.findBugsByLinkedTasks = async (taskIds) => {
+  if (!taskIds.length) return []
+  const { rows } = await pool.query(
+    `SELECT id, bug_number, title, status, severity, priority, environment,
+            steps_to_reproduce, linked_task_id, reporter_id, sla_resolution_due_at, sla_breached
+       FROM bugs WHERE linked_task_id = ANY($1::uuid[])`,
+    [taskIds]
+  )
+  return rows
+}
+
+exports.findAttachmentsForBugs = async (bugIds) => {
+  if (!bugIds.length) return []
+  const { rows } = await pool.query(
+    `SELECT id, bug_id, file_name, file_type, file_size, url, created_at
+       FROM bug_attachments WHERE bug_id = ANY($1::uuid[]) ORDER BY created_at`,
+    [bugIds]
   )
   return rows
 }

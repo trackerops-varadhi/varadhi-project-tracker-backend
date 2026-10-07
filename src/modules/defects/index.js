@@ -49,3 +49,40 @@ exports.runSlaSweepNow = slaCron.runBugSlaSweepNow
  * instead and own the response shaping themselves.
  */
 exports.projectBugsHandler = require('./controller').getBugsByProject
+
+/**
+ * The bug behind each linked task, for the task list and task detail
+ * (role workspaces: developers work bugs from their tasks, not the Bugs
+ * module). Batched — one query for bugs, one for attachments, one for names.
+ *
+ * @param {string[]} taskIds
+ * @returns {Promise<Map<string, object>>} taskId → bug card
+ */
+exports.getBugCardsForTasks = async (taskIds) => {
+  const repo = require('./repo')
+  const identity = require('../identity')
+  const { STATUS_LABELS } = require('./workflow')
+  const rows = await repo.findBugsByLinkedTasks([...new Set((taskIds || []).filter(Boolean))])
+  if (rows.length === 0) return new Map()
+  const [attachments, users] = await Promise.all([
+    repo.findAttachmentsForBugs(rows.map((r) => r.id)),
+    identity.getUserCards(rows.map((r) => r.reporter_id)),
+  ])
+  return new Map(rows.map((r) => [r.linked_task_id, {
+    id: r.id,
+    key: `BUG-${r.bug_number}`,
+    title: r.title,
+    status: r.status,
+    statusLabel: STATUS_LABELS[r.status] || r.status,
+    severity: r.severity,
+    priority: r.priority,
+    environment: r.environment,
+    stepsToReproduce: r.steps_to_reproduce,
+    slaDueAt: r.sla_resolution_due_at,
+    slaBreached: r.sla_breached,
+    reporter: r.reporter_id ? { id: r.reporter_id, name: users.get(r.reporter_id)?.name ?? null } : null,
+    attachments: attachments.filter((a) => a.bug_id === r.id).map((a) => ({
+      id: a.id, fileName: a.file_name, fileType: a.file_type, fileSize: a.file_size == null ? null : Number(a.file_size), url: a.url,
+    })),
+  }]))
+}
