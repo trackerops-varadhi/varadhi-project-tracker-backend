@@ -63,7 +63,17 @@ services:
       - key: NOTIFICATION_ACTION_TTL_HOURS
         value: "72"
       # One switch for every background sweep, including the Module 4 calendar
-      # sync and the Module 5 Teams retry/digest jobs.
+      # sync, the Module 5 Teams retry/digest jobs and the Module 9 work-status
+      # and leave-notice sweeps. A second gate follows it in server.js: only the
+      # instance holding the advisory lock runs them, so N instances do not send
+      # N copies.
+      #
+      # NOTE: production currently runs with this set to "false" in the Render
+      # dashboard, which overrides the value here. It was turned off before the
+      # schema split, when the reminder sweep's cross-schema query could not run
+      # at all; that query has since been rewritten through module interfaces.
+      # Turning it back on is a deliberate step, taken after a deploy is
+      # verified -- not part of one.
       - key: ENABLE_CRON
         value: "true"
       # ── Modules 4 & 5 ──────────────────────────────────────────────────────
@@ -73,6 +83,15 @@ services:
       # make every stored token undecryptable and force all users to reconnect.
       # sync:false keeps it out of git — set it in the Render dashboard.
       - key: ENCRYPTION_KEY
+        sync: false
+      # ── Module 9 ───────────────────────────────────────────────────────────
+      # Encrypts employee Aadhaar numbers at rest. Deliberately NOT derivable
+      # from JWT_SECRET (platform/crypto.js forPurpose({ allowDerived: false })):
+      # a JWT rotation must never be able to make stored Aadhaar numbers
+      # undecryptable. Without it the people module refuses to WRITE an Aadhaar
+      # number and everything else works normally.
+      # Set it once in the Render dashboard and never change it.
+      - key: PII_ENCRYPTION_KEY
         sync: false
       # Public origin of THIS service. Required for OAuth: the redirect URI
       # registered with Google/Microsoft must match exactly, and deriving it
