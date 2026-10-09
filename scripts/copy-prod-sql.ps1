@@ -29,6 +29,7 @@ $steps = [ordered]@{
   'qc'        = @{ file = 'production-qc-role.sql';               note = 'adds the qc role.' }
   'verify'    = @{ file = 'production-verify.sql';                note = 'read-only. Final check: every Module 9 object, and anything left in public.' }
   'shadow'    = @{ file = 'production-public-shadow.sql';         note = 'read-only. What is inside the public.user_sessions / user_tokens shadows.' }
+  'dropshadow'= @{ file = 'production-drop-public-shadow.sql';    note = 'DESTRUCTIVE and optional. Drops public.user_sessions / user_tokens. Read its header first.' }
 }
 
 if (-not $Step) {
