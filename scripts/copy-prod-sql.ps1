@@ -17,6 +17,7 @@ $docs = Join-Path $PSScriptRoot '..\docs'
 $steps = [ordered]@{
   'precheck'  = @{ file = 'production-precheck.sql';              note = 'read-only. Which scripts has this database already had?' }
   'drift'     = @{ file = 'drift-check.sql';                      note = 'read-only. Stop on any stop condition.' }
+  'state'     = @{ file = 'production-state.sql';                 note = 'read-only. Every ledger row with its timestamp - run this when a guard refuses.' }
   'cutover0'  = @{ file = 'production-cutover.sql'; from = 36;  to = 105; note = 'read-only. SAVE THE OUTPUT - it is the rollback script.' }
   'cutover1'  = @{ file = 'production-cutover.sql'; from = 107; to = 283; note = 'THE CUTOVER. Backup first. One transaction.' }
   'cutover2'  = @{ file = 'production-cutover.sql'; from = 285; to = 326; note = 'read-only verify.' }
