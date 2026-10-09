@@ -27,6 +27,7 @@ $steps = [ordered]@{
   'people'    = @{ file = 'production-people-create.sql';         note = 'creates the people schema.' }
   'module9'   = @{ file = 'production-module9-full.sql';          note = 'hr role, profile, recruitment, leave, work status.' }
   'qc'        = @{ file = 'production-qc-role.sql';               note = 'adds the qc role.' }
+  'verify'    = @{ file = 'production-verify.sql';                note = 'read-only. Final check: every Module 9 object, and anything left in public.' }
 }
 
 if (-not $Step) {
