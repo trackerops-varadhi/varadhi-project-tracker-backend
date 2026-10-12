@@ -233,6 +233,21 @@ async function main() {
   console.log('\n7. Nudge + escalation sweeps')
   {
     const wf = require('../src/modules/workforce')
+
+    // This section drives workforce IN-PROCESS instead of through the API, so
+    // it has to compose what server.js composes at boot. workforce asks who a
+    // person reports to through a port (workforce/org.js) rather than requiring
+    // people back — that require was a dependency cycle — and `people` registers
+    // itself as the answer in its subscribe(). Without this line the escalation
+    // below has nobody to escalate to, and org.js says so in a warning.
+    //
+    // Section 1's late-notice check needs the same wiring and already had it for
+    // free: it goes through the API, and that process booted server.js.
+    //
+    // Same pattern as project-deletion.test.js, which calls subscribe() for the
+    // modules it drives directly.
+    require('../src/modules/people').subscribe()
+
     // lead logged time today (check-in above) and has no status.
     if (!isWeekend(today)) {
       await wf.runWorkStatusNudgeNow()
