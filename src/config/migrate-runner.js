@@ -445,4 +445,9 @@ if (require.main === module) {
   })
 }
 
-module.exports = { MODULES, LEDGER_TABLE, MIGRATIONS_ROOT, resolveTarget, migrationFiles }
+// DEV_REF/PROD_REF are exported so that any other tool which must refuse
+// production refuses the SAME project, from this one definition. A second copy
+// of the production ref somewhere else is a copy that can be updated late.
+module.exports = {
+  MODULES, LEDGER_TABLE, MIGRATIONS_ROOT, resolveTarget, migrationFiles, DEV_REF, PROD_REF,
+}

@@ -24,6 +24,8 @@
     "migrate:status": "node src/config/migrate-runner.js status",
     "migrate:down": "node src/config/migrate-runner.js down",
     "migrate:baseline": "node src/config/migrate-runner.js baseline",
+    "schema:doc": "node scripts/gen-schema-doc.js",
+    "schema:doc:check": "node scripts/gen-schema-doc.js --check",
     "test:migrate-system": "node scripts/migrate-system.test.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
