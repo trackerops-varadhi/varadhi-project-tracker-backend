@@ -12,6 +12,26 @@
 # Order is therefore: migrate the database first, verify, then deploy. See the
 # deployment runbook at docs/PRODUCTION-DEPLOYMENT.md.
 #
+# TWO SERVICES, ONE CODEBASE
+#
+# `varadhi-backend` serves HTTP and runs no sweeps (SERVICE_ROLE=web).
+# `varadhi-cron` runs the sweeps and binds no port (SERVICE_ROLE=cron).
+#
+# Same repo, same build, same image — only SERVICE_ROLE differs. See the role
+# block at the top of src/server.js. Why: a sweep that stalls on a slow query
+# used to hold the event loop a request needed, and the web tier could not be
+# scaled without relying on the advisory lock to suppress N-1 copies of every
+# sweep. Now "the API is busy" and "a sweep is slow" are two problems with two
+# restart buttons.
+#
+# THE CRON WORKER SHIPS PAUSED (ENABLE_CRON=false), on purpose. Turning the
+# sweeps on is a deliberate step taken after a deploy is verified, and it is now
+# a change to one service that cannot affect the API. Until it is flipped, no
+# sweep runs anywhere — which is exactly what production does today.
+#
+# A Render `worker` is not on the free plan. This blueprint therefore costs one
+# more paid instance than it did; decide that before applying it.
+#
 # TWO THINGS THIS FILE DOES NOT CONFIGURE, both deliberate:
 #   RATE_LIMIT_STORE  unset means the in-memory store, which is correct for a
 #                     single instance. Set it to `postgres` AFTER migration 0002
@@ -35,12 +55,24 @@ services:
     # (and would fail outright before the schema migration has run).
     healthCheckPath: /health
     envVars:
+      # Serves HTTP, runs no sweeps. The cron worker below owns those.
+      #
+      # Unset would mean `all` (serve HTTP *and* sweep), which is what this
+      # service did before the split and what a local `npm run dev` still does.
+      # It is named here rather than left to the default so that reading this
+      # file tells you which half of the system this service is.
+      - key: SERVICE_ROLE
+        value: web
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
         fromDatabase:
           name: varadhi-db
           property: connectionString
+      # Generated here and INHERITED by the worker via fromService. Both
+      # processes must hold the same secret: notification action tokens are
+      # signed with it, and a worker that signed them differently would mint
+      # links the API rejects.
       - key: JWT_SECRET
         generateValue: true
       # Must be the real deployed frontend origin: it is both a CORS allowed
@@ -74,6 +106,15 @@ services:
       # at all; that query has since been rewritten through module interfaces.
       # Turning it back on is a deliberate step, taken after a deploy is
       # verified -- not part of one.
+      #
+      # INERT ON THIS SERVICE. With SERVICE_ROLE=web, server.js refuses to start
+      # a sweep whatever this says — the role is checked before the switch. The
+      # key is kept only because the history above is worth keeping.
+      #
+      # It is not a safety net: if this service were ever set back to
+      # SERVICE_ROLE=all, this `true` is what would start the sweeps. The real
+      # net remains production's dashboard override to false. The value that
+      # actually decides anything lives on `varadhi-cron` below.
       - key: ENABLE_CRON
         value: "true"
       # ── Modules 4 & 5 ──────────────────────────────────────────────────────
@@ -109,6 +150,108 @@ services:
         sync: false
       - key: MS_CLIENT_SECRET
         sync: false
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # The scheduled sweeps. No port, no routes, no public URL.
+  #
+  # EVERY SHARED SECRET IS INHERITED, NOT RE-DECLARED. A sweep is not a
+  # read-only job: the calendar sync refreshes OAuth tokens and the Teams jobs
+  # read webhook URLs, both of which are encrypted at rest with ENCRYPTION_KEY.
+  # A worker holding a DIFFERENT key would not fail loudly — it would fail to
+  # decrypt every stored token and report them as broken connections. So these
+  # are pulled from the web service with fromService rather than set twice.
+  #
+  # If Render cannot resolve one of these (it refuses fromService against a
+  # sync:false key on some plans), set it in THIS service's dashboard to the
+  # byte-identical value the web service holds. Not a fresh one.
+  - type: worker
+    name: varadhi-cron
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    # No healthCheckPath: a worker takes no inbound traffic, so there is nothing
+    # for Render to probe. Liveness is the process staying up, which server.js
+    # guarantees even on standby — see keepWorkerAlive().
+    envVars:
+      - key: SERVICE_ROLE
+        value: cron
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: varadhi-db
+          property: connectionString
+      # SHIPS PAUSED. Flip to true in this service's dashboard once the deploy
+      # is verified. Doing it here instead would turn nine sweeps on as part of
+      # a deploy, which is how a release becomes twenty unexpected emails.
+      - key: ENABLE_CRON
+        value: "false"
+      # How often a standby worker asks for the advisory lock. Only matters with
+      # more than one instance; the default is 60s.
+      - key: CRON_LEADER_RETRY_MS
+        value: "60000"
+      - key: JWT_SECRET
+        fromService:
+          name: varadhi-backend
+          type: web
+          envVarKey: JWT_SECRET
+      # Deep links in the notifications these sweeps send.
+      - key: FRONTEND_URL
+        value: https://varadhi-project-tracker.vercel.app
+      - key: API_PUBLIC_URL
+        value: https://varadhi-backend.onrender.com
+      - key: NOTIFICATION_ACTION_TTL_HOURS
+        value: "72"
+      # Push. Same reasoning as the web service: without BOTH keys the channel
+      # is a silent no-op, so a sweep would reach in-app and email but not push.
+      - key: VAPID_PUBLIC_KEY
+        fromService:
+          name: varadhi-backend
+          type: web
+          envVarKey: VAPID_PUBLIC_KEY
+      - key: VAPID_PRIVATE_KEY
+        fromService:
+          name: varadhi-backend
+          type: web
+          envVarKey: VAPID_PRIVATE_KEY
+      - key: VAPID_SUBJECT
+        value: mailto:support@varadhi.local
+      # Calendar OAuth tokens and Teams webhook URLs at rest. The calendar sync
+      # sweep cannot do its job without this matching the web service exactly.
+      - key: ENCRYPTION_KEY
+        fromService:
+          name: varadhi-backend
+          type: web
+          envVarKey: ENCRYPTION_KEY
+      # Aadhaar at rest. No sweep writes one today, but the people module's jobs
+      # load profiles, and a mismatched key here would read them as corrupt.
+      - key: PII_ENCRYPTION_KEY
+        fromService:
+          name: varadhi-backend
+          type: web
+          envVarKey: PII_ENCRYPTION_KEY
+      # The calendar sweep refreshes provider tokens, so it needs the same
+      # client credentials the web service uses to obtain them.
+      - key: GOOGLE_CLIENT_ID
+        fromService:
+          name: varadhi-backend
+          type: web
+          envVarKey: GOOGLE_CLIENT_ID
+      - key: GOOGLE_CLIENT_SECRET
+        fromService:
+          name: varadhi-backend
+          type: web
+          envVarKey: GOOGLE_CLIENT_SECRET
+      - key: MS_CLIENT_ID
+        fromService:
+          name: varadhi-backend
+          type: web
+          envVarKey: MS_CLIENT_ID
+      - key: MS_CLIENT_SECRET
+        fromService:
+          name: varadhi-backend
+          type: web
+          envVarKey: MS_CLIENT_SECRET
 
 databases:
   - name: varadhi-db

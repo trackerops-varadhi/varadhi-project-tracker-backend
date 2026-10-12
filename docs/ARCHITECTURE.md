@@ -39,7 +39,7 @@ Every structural idea in it is already here. The names differ, and two of them c
 | `src/modules/email/` | `src/utils/sendEmail.js` | A transport, not a bounded context: it owns no tables and no routes. It is called only by `notify/engine.js`, which is the single fan-out point for in-app + push + email. Promoting it to a module would create a module with one function in it. |
 | `src/modules/audit/` | `src/modules/notify/audit.js`, `defects/workflow.js#logBugActivity` | Auditing here is **per-context**, not central: notification delivery/action events in `notify`, bug state transitions in `bug_activity_logs`. There is no app-wide audit trail. If you want one, that is a new module and a new table — say so and it gets built properly. |
 | `src/modules/admin/` | *no module* | Admin is a **role**, not a context. `restrictTo('admin')` sits on the endpoints that need it, inside the module that owns the data: user management in `identity/users.routes.js`, SLA rules in `defects/routes.js`, leave policy in `workforce/leave.routes.js`. An `admin` module would have to reach into five other modules' tables, which `lint:boundaries` would reject. |
-| `src/modules/core-gateway/`, `identity-gateway/` | *not applicable* | Gateways are a microservice deployment concern. This is one Express process on Render. The module boundary **is** the future service boundary: each module already talks to the others only through `index.js`, so one can be lifted out behind HTTP without untangling anything. Adding gateways before there is a second process would be scaffolding with nothing on it. |
+| `src/modules/core-gateway/`, `identity-gateway/` | *not applicable* | Gateways are a microservice deployment concern. This is one codebase deployed as **two processes** (§8), neither of which takes traffic from the other, so there is nothing to route between. The module boundary **is** the future service boundary: each module already talks to the others only through `index.js`. Adding gateways before there is a service to route to would be scaffolding with nothing on it. |
 | `src/modules/payouts/` | *not applicable* | There is no money in this product. No payroll, no payouts, no payment provider. |
 
 ---
@@ -211,7 +211,58 @@ against a database whose users would receive the notifications.
 
 ---
 
-## 8. Where does my change go?
+## 8. One codebase, three ways to run it
+
+`SERVICE_ROLE` decides what a process does. Same repo, same build, same image.
+
+| `SERVICE_ROLE` | Serves HTTP | Runs sweeps | Subscribes to events |
+| --- | --- | --- | --- |
+| `all` *(default)* | yes | yes | yes |
+| `web` | yes | **no** | yes |
+| `cron` | **no** (binds no port) | yes | yes |
+
+`all` is the default deliberately: a deployment that sets nothing behaves exactly as it did before the split,
+and `npm run dev` is still one process. If `cron` were ever implied, the failure mode would be an environment
+where `ENABLE_CRON` is true, no worker exists, and no sweep runs anywhere — silently.
+
+Event subscriptions are **not** gated by role or by `ENABLE_CRON`: they fire on the request path, not on a
+clock. Turning the sweeps off must not stop a deleted task's calendar event being reaped.
+
+### Three gates on a sweep, in order
+
+1. **`SERVICE_ROLE`** — the web tier must not sweep even with `ENABLE_CRON=true`, or the web dyno could win
+   the advisory lock and leave the cron worker idle, defeating the point of having one.
+2. **`ENABLE_CRON`** — the operator's kill switch. `cron` + `false` is a worker deliberately paused.
+3. **The advisory lock** (`platform/leader.js`) — only the process holding it sweeps, so N instances do not
+   send N copies. It fails closed: any uncertainty means no cron here.
+
+### Why a cron worker must not exit
+
+A web process is held open by its listener. A worker is held open only by its own timers — and there are two
+ways to have none: `ENABLE_CRON=false`, or losing the advisory lock, after which `leader.acquire()` closes
+the connection it opened. Either way the process would run out of work, exit 0, and Render would restart it
+forever, looking like a crash loop while being nothing of the kind.
+
+So `keepWorkerAlive()` holds a standby open and keeps asking for the lock. That is also what makes a second
+worker worth running: when the leader is redeployed, Postgres drops its session lock and a standby takes over
+within one `CRON_LEADER_RETRY_MS` instead of sweeps stopping until someone notices.
+
+### On Render
+
+`varadhi-backend` (web, `SERVICE_ROLE=web`) and `varadhi-cron` (worker, `SERVICE_ROLE=cron`). Every shared
+secret on the worker is inherited with `fromService` rather than set twice — a sweep is not read-only: the
+calendar sync refreshes OAuth tokens and the Teams jobs read webhook URLs, both encrypted at rest with
+`ENCRYPTION_KEY`. A worker holding a different key would not fail loudly; it would fail to decrypt every
+stored token and report them as broken connections.
+
+**The worker ships with `ENABLE_CRON=false`.** Turning the sweeps on is a deliberate step after a deploy is
+verified, and it is now a change to one service that cannot affect the API.
+
+A Render `worker` is not on the free plan.
+
+---
+
+## 9. Where does my change go?
 
 1. **Which table does it touch?** §2 names the owner. That module is where the code goes.
 2. **Does it need a column?** A new migration in `migrations/<module>/`, then `npm run migrate` against dev,

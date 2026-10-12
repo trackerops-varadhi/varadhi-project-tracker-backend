@@ -237,20 +237,63 @@ app.use(notFound)
 app.use(errorTracking.middleware)
 app.use(errorHandler)
 
+// â”€â”€â”€ Service role â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+/**
+ * ONE CODEBASE, THREE WAYS TO RUN IT
+ *
+ *   all   (default)  serve HTTP and run the scheduled sweeps — today's behaviour
+ *   web              serve HTTP only; never runs a sweep
+ *   cron             run the sweeps only; never binds a port
+ *
+ * WHY
+ * The nine sweeps share a process with every request. A sweep that stalls on a
+ * slow query holds the event loop a request needed; a sweep that throws on boot
+ * takes the API down with it; and the web tier cannot be scaled without either
+ * multiplying the sweeps or relying on the advisory lock to suppress N-1 of
+ * them. Splitting the roles makes "the API is busy" and "a sweep is slow" two
+ * separate problems with two separate restart buttons — and it is the first
+ * real process boundary in this backend, so it is also the cheapest rehearsal
+ * for extracting a module later.
+ *
+ * `all` REMAINS THE DEFAULT, DELIBERATELY. A deployment that sets nothing
+ * behaves exactly as it does today. If `cron` were implied by anything, the
+ * failure mode would be an environment where ENABLE_CRON is true, no worker
+ * exists, and no sweep runs anywhere — silently. Both halves have to be asked
+ * for by name.
+ *
+ * ENABLE_CRON is unchanged and still wins first: it is the operator's kill
+ * switch, and `cron` + ENABLE_CRON=false is a worker deliberately paused.
+ */
+const ROLES = ['all', 'web', 'cron']
+const SERVICE_ROLE = String(process.env.SERVICE_ROLE || 'all').trim().toLowerCase()
+
+if (!ROLES.includes(SERVICE_ROLE)) {
+  console.error(`\nUNKNOWN SERVICE_ROLE "${SERVICE_ROLE}".\n  Expected one of: ${ROLES.join(' | ')}\n`)
+  process.exit(1)
+}
+
+const SERVES_HTTP = SERVICE_ROLE !== 'cron'
+const RUNS_JOBS = SERVICE_ROLE !== 'web'
+
 // â”€â”€â”€ Start Server â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const PORT = process.env.PORT || 5000
 const bootStartedAt = Date.now()
 
-app.listen(PORT, async () => {
+const boot = async () => {
   const env = process.env.NODE_ENV || 'development'
 
   // Startup banner mirroring the Next.js dev server's shape, so both terminals
   // read the same way: a titled first line, indented `- key: value` facts, then
   // a `âœ“ Ready in Xms` line once everything is wired.
   console.log('')
-  console.log(paint(36, paint(1, 'â—† Varadhi Backend')))
-  console.log(`   - Local:    http://localhost:${PORT}`)
-  console.log(`   - Health:   http://localhost:${PORT}/health`)
+  console.log(paint(36, paint(1, `â—† Varadhi Backend${SERVICE_ROLE === 'all' ? '' : ` (${SERVICE_ROLE})`}`)))
+  if (SERVES_HTTP) {
+    console.log(`   - Local:    http://localhost:${PORT}`)
+    console.log(`   - Health:   http://localhost:${PORT}/health`)
+  } else {
+    // Said plainly, because a worker with no URL looks broken otherwise.
+    console.log(`   - Role:     ${paint(2, 'cron worker — no port, no routes served')}`)
+  }
   console.log(`   - Env:      ${env}`)
 
   // Each start*Cron/fanout announces itself with its own `[name] scheduled ...`
@@ -264,31 +307,40 @@ app.listen(PORT, async () => {
   // migrated" is a refusal to boot rather than a 500 on somebody's login. It
   // also refuses memory-store-plus-MULTI_INSTANCE outright, which is the
   // misconfiguration that silently multiplies every quota by the instance count.
-  try {
-    await rateLimitStore.verify()
-  } catch (err) {
-    console.error(`
+  // Only where there is traffic to limit. A cron worker serves no requests, so
+  // an unusable rate-limit store is not a reason to stop its sweeps.
+  if (SERVES_HTTP) {
+    try {
+      await rateLimitStore.verify()
+    } catch (err) {
+      console.error(`
 RATE LIMIT STORE UNUSABLE
   ${err.message}
 `)
-    process.exit(1)
+      process.exit(1)
+    }
   }
 
-  // Leadership, only if cron is on at all — no point holding a connection open
-  // to win a race nobody is running.
+  // Leadership, only where cron could run at all — no point holding a
+  // connection open to win a race nobody is running.
   let cronLeader = false
-  if (process.env.ENABLE_CRON !== 'false') {
+  if (RUNS_JOBS && process.env.ENABLE_CRON !== 'false') {
     cronLeader = await leader.acquire()
     if (cronLeader) leader.installExitHandlers()
   }
 
   const bootLog = console.log
-  const registered = []
+  // Scheduled jobs and event subscriptions are counted apart, because they are
+  // different things that this banner used to add together: a cron worker with
+  // ENABLE_CRON=false reported "Jobs: 5 active" directly above "Cron: disabled",
+  // which is two lines contradicting each other. Sweeps run on a clock;
+  // subscriptions fire on the request path and are never gated by ENABLE_CRON.
+  const registered = { scheduled: [], subscribed: [] }
   console.log = (...args) => {
     const line = typeof args[0] === 'string' ? args[0] : ''
-    const match = /^\[([\w-]+)\] (?:.*\b)?(?:scheduled|subscribed)\b/.exec(line)
+    const match = /^\[([\w-]+)\] (?:.*\b)?(scheduled|subscribed)\b/.exec(line)
     if (match) {
-      registered.push(match[1])
+      registered[match[2]].push(match[1])
       return
     }
     bootLog(...args)
@@ -307,7 +359,12 @@ RATE LIMIT STORE UNUSABLE
     // false unless this process holds the advisory lock, and it fails closed —
     // any uncertainty (lock held elsewhere, connection refused, query error)
     // means no cron here.
-    if (process.env.ENABLE_CRON !== 'false' && cronLeader) {
+    //
+    // RUNS_JOBS is the third gate and the outermost one: with the roles split,
+    // the web tier must not start a sweep even when ENABLE_CRON is true, or the
+    // web dyno could win the advisory lock and leave the cron worker idle —
+    // which would defeat the whole point of having one.
+    if (RUNS_JOBS && process.env.ENABLE_CRON !== 'false' && cronLeader) {
     // Module 8: Bugs Finder SLA sweep â€” flags at-risk and breached defects
     // against the server clock every 5 minutes.
     // Jobs owned by a migrated module. The module says what its jobs are; the
@@ -331,25 +388,103 @@ RATE LIMIT STORE UNUSABLE
     console.log = bootLog
   }
 
-  const unique = [...new Set(registered)]
+  const jobs = [...new Set(registered.scheduled)]
+  const subs = [...new Set(registered.subscribed)]
   console.log(
-    `   - Jobs:     ${unique.length ? `${unique.length} active` : 'disabled'}` +
-    (unique.length ? paint(2, ` (${unique.join(', ')})`) : '')
+    `   - Jobs:     ${jobs.length ? `${jobs.length} scheduled` : 'none'}` +
+    (jobs.length ? paint(2, ` (${jobs.join(', ')})`) : '')
+  )
+  console.log(
+    `   - Events:   ${subs.length ? `${subs.length} subscribed` : 'none'}` +
+    (subs.length ? paint(2, ` (${subs.join(', ')})`) : '')
   )
   // Say plainly whether this instance is the one running sweeps. With more than
   // one instance, "why did the reminder not send?" is answered by this line.
-  if (process.env.ENABLE_CRON === 'false') {
+  if (!RUNS_JOBS) {
+    console.log(`   - Cron:     ${paint(2, 'not this role (SERVICE_ROLE=web)')}`)
+  } else if (process.env.ENABLE_CRON === 'false') {
     console.log(`   - Cron:     ${paint(2, 'disabled (ENABLE_CRON=false)')}`)
   } else {
     console.log(`   - Cron:     ${cronLeader
       ? paint(32, 'leader') + paint(2, ` (advisory lock ${leader.CRON_LOCK_ID})`)
       : paint(33, 'standby') + paint(2, ` (${leader.status().reason || 'not leader'})`)}`)
   }
-  console.log(`   - Limits:   ${paint(2, `${rateLimitStore.configured()} store`
-    + (rateLimitStore.isMultiInstance() ? ', multi-instance' : ''))}`)
+  // Rate limits apply to traffic, and a cron worker has none.
+  if (SERVES_HTTP) {
+    console.log(`   - Limits:   ${paint(2, `${rateLimitStore.configured()} store`
+      + (rateLimitStore.isMultiInstance() ? ', multi-instance' : ''))}`)
+  }
   console.log(paint(32, '   âœ“ Ready') + paint(2, ` in ${Date.now() - bootStartedAt}ms`))
   console.log('')
-})
+
+  if (!SERVES_HTTP) keepWorkerAlive(cronLeader)
+}
+
+/**
+ * A cron worker must not exit, and nothing here guarantees it stays up.
+ *
+ * A web process is held open by its listener. A worker is held open only by its
+ * own timers — and there are two ways to have none: ENABLE_CRON=false, or
+ * losing the advisory lock, after which leader.acquire() closes the connection
+ * it opened. Either way the process would run out of work, exit 0, and Render
+ * would restart it, forever, looking like a crash loop while being nothing of
+ * the kind.
+ *
+ * So a standby worker holds itself open and keeps trying for the lock. That
+ * also makes a second worker worth running: when the leader is redeployed or
+ * killed, Postgres drops its session lock, and whichever standby asks next
+ * takes over within one interval instead of sweeps stopping until someone
+ * notices.
+ */
+function keepWorkerAlive(isLeader) {
+  if (isLeader) return
+
+  const paused = process.env.ENABLE_CRON === 'false'
+  const everyMs = Math.max(10_000, Number(process.env.CRON_LEADER_RETRY_MS) || 60_000)
+
+  if (paused) {
+    // Nothing to retry: ENABLE_CRON is read once, at boot, so polling it here
+    // would never see a change. One referenced timer holds the process open, so
+    // unpausing is a restart rather than a redeploy. Deliberately NOT unref'd —
+    // an unref'd timer lets the event loop drain and the process exit, which is
+    // the exact behaviour this function exists to prevent.
+    console.log(paint(2, '   (paused — holding the worker open; set ENABLE_CRON=true and restart)'))
+    setInterval(() => {}, 1 << 30)
+    return
+  }
+
+  console.log(paint(2, `   (standby — retrying for cron leadership every ${everyMs / 1000}s)`))
+
+  const timer = setInterval(async () => {
+    let won = false
+    try {
+      won = await leader.acquire()
+    } catch (err) {
+      logger.warn('[leader] retry failed', { error: err.message })
+      return
+    }
+    if (!won) return
+
+    clearInterval(timer)
+    leader.installExitHandlers()
+    logger.info('[leader] took over cron leadership from a standby worker', { pid: process.pid })
+
+    for (const mod of MODULES) {
+      for (const job of mod.jobs || []) job.start()
+    }
+  }, everyMs)
+}
+
+if (SERVES_HTTP) {
+  app.listen(PORT, boot)
+} else {
+  // No port. A Render worker has no inbound traffic and no health check, so
+  // binding one would only invite something to connect to it.
+  boot().catch((err) => {
+    console.error(`\nCRON WORKER FAILED TO START: ${err.message}\n`)
+    process.exit(1)
+  })
+}
 
 module.exports = app
 
