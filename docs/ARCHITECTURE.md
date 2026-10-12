@@ -199,7 +199,8 @@ Not a module — no routes, no tables, no business rules. The things every modul
 | Command | What it proves |
 | --- | --- |
 | `npm run lint` | eslint over the repo |
-| `npm run lint:boundaries` | no module reaches past another's `index.js` |
+| `npm run lint:boundaries` | no module reaches past another's `index.js`, and no **new** dependency cycle (§9) |
+| `npm run modules:graph` | prints the cross-module dependency graph and what is extractable |
 | `npm run test:isolation` | pools read their own tables; cross-module unqualified names raise |
 | `npm run schema:doc:check` | `docs/SCHEMA.md` matches the database |
 | `npm run test:bugs` | 130 integration tests against a running API (self-cleaning `ZZ `-prefixed fixtures) |
@@ -262,7 +263,94 @@ A Render `worker` is not on the free plan.
 
 ---
 
-## 9. Where does my change go?
+## 9. Extracting a module — what the graph says
+
+```bash
+npm run modules:graph      # the full dependency graph and extraction ranking
+npm run lint:boundaries    # also fails on a NEW cycle
+```
+
+This is a **modular monolith**, not microservices: one codebase, two processes (§8), modules talking by direct
+function call through `index.js`. The boundaries are service-shaped so a module *can* leave later. Measured,
+here is how close that actually is.
+
+### 27 cross-module edges, and two knots
+
+| Module | Depended on by | Depends on |
+| --- | --- | --- |
+| `identity` | **8** | notify, work |
+| `work` | 7 | defects, identity, notify |
+| `notify` | 7 | identity, work |
+| `files` | 2 | identity, notify, work |
+| `defects` | 1 | files, identity, notify, work |
+| `people` | 1 | files, identity, notify, workforce |
+| `workforce` | 1 | identity, notify, people, work |
+| **`insights`** | **0** | identity, work |
+| **`integrations`** | **0** | identity, notify, work |
+
+Two strongly-connected components — modules that are mutually reachable, and therefore come out together or
+not at all:
+
+```
+{ defects <-> files <-> identity <-> notify <-> work }
+{ people <-> workforce }
+```
+
+16 of the 27 edges take part in one. Node's circular `require` is already worked around with the lazy
+`const notify = () => require('../notify')` form, which hides the cycle from Node but does not remove it:
+over HTTP a lazy require is just a lazy client, and the cycle is still two services that each need the other
+to start.
+
+Those 16 are recorded in `scripts/module-graph.baseline.json`. **New ones fail the check.** The point is not
+that the current ones are fine — it is that they are a known, bounded piece of work, and a seventeenth
+appearing by accident is not.
+
+### Extractable today
+
+`insights` and `integrations`. Nothing depends on either, so nothing has to learn to call them over a
+network, and neither sits in a knot.
+
+**`integrations` is the better first candidate**: it is already event-driven (`work-subscriber.js`), and its
+work is slow outbound I/O to Google, Microsoft and Teams — exactly what you want off the request path. If it
+is down, the tracker still works and a calendar sync is late. It would need HTTP clients for `identity`,
+`notify` and `work`.
+
+`insights` has zero inbound too, but it is read-heavy aggregation over other modules' data; over HTTP it
+would need `work` to expose aggregates it does not expose today, and every dashboard would pay a network hop.
+
+### What a real extraction needs, beyond the boundary
+
+1. **A network client per consumed module**, with the same signature as that module's `index.js` — which is
+   why every function there is already `async` — plus timeouts, retries and a circuit breaker.
+2. **Asymmetric JWTs.** `protect` does a database lookup in `identity`'s schema on every request. If
+   `identity` becomes a service, every other service either calls it on every request or verifies the token
+   itself. Today the token is signed with a shared `JWT_SECRET` (HS256); verifying locally without sharing a
+   signing secret means RS256 — identity signs with a private key, everyone else verifies with the public
+   one.
+3. **A broker instead of an EventEmitter.** `events.js` is in-process; `emit()` awaits its subscribers and
+   contains their failures. A broker delivers at-least-once, so every subscriber has to become idempotent,
+   and ordered flows like `TASK_DELETED` need that stated explicitly.
+4. **Sagas where a transaction used to be.** There is no distributed transaction. Two flows span modules
+   inside one today: `defects/task-sync.js` creating a `work` task when a bug is assigned, and converting a
+   candidate, which writes an `identity` user and a `people` profile. Each needs a compensating action.
+5. **`platform/` becomes a package.** db, logger, crypto and the response envelope are shared by every
+   module. Published once, or duplicated and left to drift.
+6. **Per-service deploy, routing and tracing.** N services, N env sets, a gateway so the frontend keeps one
+   base URL, and correlation IDs across processes — `platform/request-context.js` is the foundation for the
+   last one.
+
+### The honest recommendation
+
+Don't do all of it. For this product — one internal tracker, ~20 users, one Postgres — the operational cost
+of nine services (brokers, sagas, a gateway, nine deploys) exceeds what it buys.
+
+Extract **one** module when there is a reason: a part that is genuinely heavy, or a team that needs to deploy
+independently. `integrations` is that module. Everything else stays where it is, and the cycle gate keeps the
+option open.
+
+---
+
+## 10. Where does my change go?
 
 1. **Which table does it touch?** §2 names the owner. That module is where the code goes.
 2. **Does it need a column?** A new migration in `migrations/<module>/`, then `npm run migrate` against dev,
