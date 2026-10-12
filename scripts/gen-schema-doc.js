@@ -11,7 +11,7 @@
  * An ORM-backed project keeps one schema file — Prisma's schema.prisma is the
  * usual example — and that file is where everyone looks to answer "what columns
  * does this table have". This backend has no ORM on purpose: the authority is
- * `migrations/<module>/*.js`, seventeen files across eight directories, each
+ * `migrations/<module>/*.js`, sixteen files across eight directories, each
  * holding a diff rather than a shape. There is no wrong place to look, but
  * there was also nowhere right: `src/config/schema.sql` is an empty tombstone
  * and must stay one, and reading eight migration directories to learn a column
