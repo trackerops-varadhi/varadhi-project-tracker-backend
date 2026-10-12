@@ -6,9 +6,9 @@ const identity = require('../identity')
 const notify = require('../notify')
 const { BUSINESS_TZ, todayIn, daysBetween, isYmd } = require('./dates')
 
-// Lazy: people's dashboard reads workforce, so a top-level require here
-// would be a cycle. Used for the reporting manager on a late-notice request.
-const people = () => require('../people')
+// The org chart, through workforce's own port rather than by requiring
+// `people` back — see org.js for why that direction is gone.
+const org = require('./org')
 
 // Guards `WHERE id = $1` against a non-UUID path param, which Postgres rejects
 // with `invalid input syntax for type uuid` rather than returning no rows.
@@ -189,8 +189,10 @@ exports.create = async (currentUser, body) => {
 }
 
 const notifyLateNotice = async (dto) => {
-  const managerId = await people().getReportingManagerId(dto.userId)
-  if (!managerId || managerId === dto.userId) return
+  // The port already drops a missing profile, an absent manager and a
+  // self-managed line, so an id here is always someone else to tell.
+  const managerId = await org.reportingManagerFor(dto.userId)
+  if (!managerId) return
   await notify.dispatch({
     userId: managerId,
     type: notify.TYPES.LEAVE_LATE_NOTICE,

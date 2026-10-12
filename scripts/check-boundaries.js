@@ -68,6 +68,37 @@ const resolveSpec = (fromFile, spec) => {
 
 const REQUIRE_RE = /require\(\s*['"](\.[^'"]+)['"]\s*\)/g
 
+/**
+ * Is this match inside a comment?
+ *
+ * The scan reads raw source, so a require written in prose counted as a
+ * dependency — found the hard way: a comment in workforce/org.js EXPLAINING
+ * that `require('../people')` had been removed was enough to keep reporting
+ * the cycle it documented.
+ *
+ * Deliberately a conservative test rather than a tokenizer. It can only ever
+ * say "this is a comment" about something preceded by `//` on its own line or
+ * sitting inside an unclosed `/*`, so a real require can never be missed —
+ * which is the failure that would matter, since a missed require is a boundary
+ * violation nobody is told about. The reverse mistake, counting a require
+ * inside a string that happens to contain a comment opener, is harmless here.
+ */
+const isInComment = (src, at) => {
+  const lineStart = src.lastIndexOf('\n', at) + 1
+  const prefix = src.slice(lineStart, at)
+
+  // `// const people = () => require('../people')`
+  if (prefix.includes('//')) return true
+  // A JSDoc continuation line: ` * ... require('../people')`
+  if (/^\s*\*/.test(prefix)) return true
+
+  // Inside a block comment that opened on an earlier line and has not closed.
+  const before = src.slice(0, at)
+  const lastOpen = before.lastIndexOf('/*')
+  if (lastOpen === -1) return false
+  return before.lastIndexOf('*/') < lastOpen
+}
+
 const violations = []
 const shimUsers = []
 const files = walk(SRC)
@@ -112,6 +143,8 @@ for (const file of files) {
   const owner = moduleOf(file)
 
   for (const m of src.matchAll(REQUIRE_RE)) {
+    if (isInComment(src, m.index)) continue
+
     const spec = m[1]
     const target = resolveSpec(file, spec)
     if (!target) continue
@@ -311,7 +344,11 @@ if (knots.length) {
 
 if (fixedCycles.length) {
   console.log('')
-  console.log(`  ✓ ${fixedCycles.length} baselined cycle edge(s) are gone: ${fixedCycles.join(', ')}`)
+  // "No longer cyclic", not "gone": an edge leaves this list either because the
+  // require was removed or because it is still there and no longer part of a
+  // cycle. Breaking people <-> workforce did both at once — workforce's require
+  // went, and people's stayed and became acyclic.
+  console.log(`  ✓ ${fixedCycles.length} baselined edge(s) no longer form a cycle: ${fixedCycles.join(', ')}`)
   console.log('    Shrink the baseline: npm run lint:boundaries -- --update-baseline')
 }
 

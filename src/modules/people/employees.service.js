@@ -342,9 +342,17 @@ exports.getTeamDirectory = async () => {
 
 /* ── cross-module accessors (exported through index.js) ──────────────── */
 
-exports.getReportingManagerId = async (userId) => {
-  const row = await repo.findProfile(todayIn(), userId)
-  return row?.reporting_manager_id ?? null
+/**
+ * Map<userId, managerId|null> — the resolver workforce registers for its org
+ * chart port. Batched because it is called for a whole sweep at once, and
+ * because the single-id version it replaced was being awaited inside a loop.
+ *
+ * Built on getEmployeeCards so there is one query and one definition of "the
+ * profile in force today". A user with no profile is simply absent.
+ */
+exports.getReportingManagerIds = async (userIds) => {
+  const cards = await exports.getEmployeeCards(userIds)
+  return new Map([...cards].map(([userId, c]) => [userId, c.reportingManagerId ?? null]))
 }
 
 exports.getTeamMemberIds = async (managerId) => {

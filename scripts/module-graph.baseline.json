@@ -13,10 +13,8 @@
     "identity->work",
     "notify->identity",
     "notify->work",
-    "people->workforce",
     "work->defects",
     "work->identity",
-    "work->notify",
-    "workforce->people"
+    "work->notify"
   ]
 }

@@ -9,8 +9,8 @@ const {
   BUSINESS_TZ, todayIn, addDays, daysBetween, isYmd, isWeekend, previousWorkingDay,
 } = require('./dates')
 
-// Lazy, as in leave.service: people reads workforce at load time.
-const people = () => require('../people')
+// The org chart, through workforce's own port — see org.js.
+const org = require('./org')
 
 const TEAM_ROLES = ['admin', 'manager', 'hr']
 // A status can be back-filled for the last week, never written for the future.
@@ -195,11 +195,18 @@ exports.sweepEscalate = async () => {
   const missing = await repo.findMissingWorkStatus(day)
   if (!missing.length) return { escalated: 0 }
 
-  const cards = await identity.getUserCards(missing)
+  // Two batched lookups for the whole sweep. This used to resolve the manager
+  // one awaited query at a time inside the loop below, next to an identity
+  // lookup that already did one call for everyone.
+  const [cards, managers] = await Promise.all([
+    identity.getUserCards(missing),
+    org.reportingManagersFor(missing),
+  ])
+
   const byManager = new Map()
   for (const userId of missing) {
-    const managerId = await people().getReportingManagerId(userId)
-    if (!managerId || managerId === userId) continue
+    const managerId = managers.get(userId)
+    if (!managerId) continue
     if (!byManager.has(managerId)) byManager.set(managerId, [])
     byManager.get(managerId).push(cards.get(userId)?.name ?? 'A team member')
   }

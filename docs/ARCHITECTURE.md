@@ -201,6 +201,7 @@ Not a module — no routes, no tables, no business rules. The things every modul
 | `npm run lint` | eslint over the repo |
 | `npm run lint:boundaries` | no module reaches past another's `index.js`, and no **new** dependency cycle (§9) |
 | `npm run modules:graph` | prints the cross-module dependency graph and what is extractable |
+| `npm run test:ports` | the org-chart port is wired, and `workforce` does not require `people` (§9) |
 | `npm run test:isolation` | pools read their own tables; cross-module unqualified names raise |
 | `npm run schema:doc:check` | `docs/SCHEMA.md` matches the database |
 | `npm run test:bugs` | 130 integration tests against a running API (self-cleaning `ZZ `-prefixed fixtures) |
@@ -274,7 +275,7 @@ This is a **modular monolith**, not microservices: one codebase, two processes (
 function call through `index.js`. The boundaries are service-shaped so a module *can* leave later. Measured,
 here is how close that actually is.
 
-### 27 cross-module edges, and two knots
+### 26 cross-module edges, and one knot
 
 | Module | Depended on by | Depends on |
 | --- | --- | --- |
@@ -283,32 +284,54 @@ here is how close that actually is.
 | `notify` | 7 | identity, work |
 | `files` | 2 | identity, notify, work |
 | `defects` | 1 | files, identity, notify, work |
-| `people` | 1 | files, identity, notify, workforce |
-| `workforce` | 1 | identity, notify, people, work |
+| `workforce` | 1 | identity, notify, work |
 | **`insights`** | **0** | identity, work |
 | **`integrations`** | **0** | identity, notify, work |
+| **`people`** | **0** | files, identity, notify, workforce |
 
-Two strongly-connected components — modules that are mutually reachable, and therefore come out together or
+One strongly-connected component — modules that are mutually reachable, and therefore come out together or
 not at all:
 
 ```
 { defects <-> files <-> identity <-> notify <-> work }
-{ people <-> workforce }
 ```
 
-16 of the 27 edges take part in one. Node's circular `require` is already worked around with the lazy
+14 of the 26 edges take part in it. Node's circular `require` is already worked around with the lazy
 `const notify = () => require('../notify')` form, which hides the cycle from Node but does not remove it:
 over HTTP a lazy require is just a lazy client, and the cycle is still two services that each need the other
 to start.
 
-Those 16 are recorded in `scripts/module-graph.baseline.json`. **New ones fail the check.** The point is not
-that the current ones are fine — it is that they are a known, bounded piece of work, and a seventeenth
+Those 14 are recorded in `scripts/module-graph.baseline.json`. **New ones fail the check.** The point is not
+that the current ones are fine — it is that they are a known, bounded piece of work, and a fifteenth
 appearing by accident is not.
+
+### The one cycle that has been broken: `people` ↔ `workforce`
+
+`people` requires `workforce` for attendance and leave, so the HR views can show who is in and who is away.
+That direction is right. `workforce` used to require `people` back for exactly one function in two places —
+`getReportingManagerId(userId)`, to find who to notify about a short-notice leave request or a missing work
+status.
+
+The data did not move: a reporting line is an HR fact and `people.employee_profiles.reporting_manager_id` is
+its right home. What was wrong is that workforce was asking a *module* when all it needed was an *answer* —
+nothing in `workforce/org.js` cares where the org chart lives. So workforce declares the question as a port,
+and `people`, which already depends on workforce, registers itself as the answer in its `subscribe()`.
+Extracted later, the same seam takes an HTTP client instead of a function.
+
+Two things fell out of it. The resolver is **batched**, where `sweepEscalate` had been awaiting one query per
+missing person inside a loop, beside an identity lookup that already did one call for everyone. And the
+"no manager, or their own manager" rule, previously written out at both call sites, now lives once in the
+port.
+
+The trade is real and worth stating: a compile-time dependency became a runtime one, so deleting the
+registration would stop manager escalations silently while every leave request still succeeded.
+`npm run test:ports` is what notices, and the port logs a warning the first time it is asked with nobody
+registered.
 
 ### Extractable today
 
-`insights` and `integrations`. Nothing depends on either, so nothing has to learn to call them over a
-network, and neither sits in a knot.
+`insights`, `integrations` and — since the cycle above was broken — `people`. Nothing depends on any of
+them, so nothing has to learn to call them over a network, and none sits in a knot.
 
 **`integrations` is the better first candidate**: it is already event-driven (`work-subscriber.js`), and its
 work is slow outbound I/O to Google, Microsoft and Teams — exactly what you want off the request path. If it

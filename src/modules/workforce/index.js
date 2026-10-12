@@ -8,9 +8,17 @@
 // service's route table and the gateway rewrite rules are derived from the same
 // paths.
 //
-// Cross-module API: the two read accessors below, consumed by people's HR
-// dashboard. Accessors, not joins — people never sees these tables.
+// Cross-module API in two halves:
+//   - the two read accessors below, consumed by people's HR dashboard.
+//     Accessors, not joins — people never sees these tables.
+//   - setReportingManagerResolver, which is the opposite direction: a question
+//     this module asks and does not answer. workforce needs to know who a
+//     person reports to in order to escalate to them, and that is an HR fact.
+//     Requiring `people` back for it made the two modules a cycle, so the
+//     question is declared here and whoever owns the org chart plugs itself in
+//     at boot. See org.js.
 
+const org = require('./org')
 const workSubscriber = require('./work-subscriber')
 const jobs = require('./jobs')
 const timeRepo = require('./time.repo')
@@ -38,6 +46,15 @@ exports.runWorkStatusEscalateNow = () => jobs.workStatusEscalate.runNow()
 // ON DELETE CASCADE the schema split dropped. Called by server.js outside the
 // ENABLE_CRON switch, like every module's subscribe(). Idempotent.
 exports.subscribe = () => workSubscriber.startWorkSubscriptions()
+
+/* ── The org chart, asked for rather than reached for ────────────────────── */
+//
+// Registered once at boot by the module that owns reporting lines (people).
+// Until it is, manager escalations are skipped and org.js logs a warning —
+// deliberately not a throw: an unwired composition must not turn a successful
+// leave request into a 500.
+exports.setReportingManagerResolver = org.setReportingManagerResolver
+exports.hasReportingManagerResolver = org.hasReportingManagerResolver
 exports.unsubscribe = () => workSubscriber.stopWorkSubscriptions()
 
 /* ── Attendance accessors ───────────────────────────────────────────────── */
