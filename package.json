@@ -29,6 +29,8 @@
     "migrate:baseline": "node src/config/migrate-runner.js baseline",
     "schema:doc": "node scripts/gen-schema-doc.js",
     "schema:doc:check": "node scripts/gen-schema-doc.js --check",
+    "db:roles": "node scripts/gen-db-roles.js",
+    "test:db-roles": "node scripts/db-roles.test.js",
     "test:migrate-system": "node scripts/migrate-system.test.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

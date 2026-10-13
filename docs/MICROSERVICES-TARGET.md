@@ -127,26 +127,50 @@ Cross-schema foreign keys were dropped during the cutover, which is why a module
 `search_path` is `<module>,extensions` with no `public`, so a module cannot *accidentally* read a sibling's
 table — but only by convention. `npm run test:isolation` is what tests that convention.
 
-### Stage B — one instance, one role per service ⬅ **the next database step**
-
-```sql
--- illustrative; prepared as migrations, applied deliberately
-CREATE ROLE svc_core        LOGIN PASSWORD :'pw';
-GRANT USAGE ON SCHEMA identity, notify, work TO svc_core;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity, notify, work TO svc_core;
-
-CREATE ROLE svc_hr          LOGIN PASSWORD :'pw';
-GRANT USAGE ON SCHEMA people, workforce TO svc_hr;
-...
-```
+### Stage B — one instance, one role per service ✅ **built, not yet applied**
 
 The whole value in one line: **a service touching a schema it does not own gets `42501 permission denied`
-instead of a quietly wrong answer.** Convention becomes enforcement. No new infrastructure, no new cost, and
-it is a prerequisite for extraction that is worth having even if extraction never happens — it is the same
-isolation `test:isolation` asserts, made true rather than tested.
+instead of a quietly wrong answer.** `npm run test:isolation` already shows that an *unqualified*
+cross-module name raises `42P01`, because `public` is off the search_path — but that is a test of a
+convention, and a *qualified* name like `people.employee_profiles` still worked from the `work` pool,
+because one role was allowed to read everything. Stage B is what makes it not work.
 
-The work: one role per service, scoped grants, `ALTER DEFAULT PRIVILEGES` so new tables inherit them, five
-connection strings, and `platform/db.js` choosing the one for its service.
+Worth having even if nothing is ever extracted: it is the isolation `test:isolation` asserts, made true
+rather than tested. No new infrastructure and no new cost.
+
+```bash
+npm run db:roles        # service-map.js -> docs/db-roles.sql   (never touches a database)
+npm run test:db-roles   # proves each role reaches its own schemas and is refused on the rest
+```
+
+| Piece | Where |
+| --- | --- |
+| module → service, one definition | `src/platform/service-map.js` |
+| the grants, generated from it | `scripts/gen-db-roles.js` → `docs/db-roles.sql` |
+| a pool connecting as its service's role | `platform/db.js` — `DATABASE_URL_<SERVICE>`, falling back to `DATABASE_URL` |
+| proof it is confined | `scripts/db-roles.test.js` |
+| whether it is on | the boot banner's `- DB:` line |
+
+**Non-breaking by construction.** With no `DATABASE_URL_*` variable set, every pool resolves to
+`DATABASE_URL` and the behaviour is exactly what it was — the banner says `shared credential (search_path
+isolation only)`. The roles can be created, granted and pointed at **one service at a time**, and the
+rollback for each is unsetting a variable, which changes nothing in the database.
+
+The SQL is **purely additive** — `CREATE ROLE` and `GRANT`, no `REVOKE`, no `DROP`, no `ALTER` of an
+existing role. Revoking from the migration role would break migrations, and a script that can only add is
+one that needs no rollback plan. It is also idempotent, so it can be re-run as each service is brought on.
+
+Two details that would otherwise bite:
+
+- Every pool's `search_path` is `<module>,extensions`, so a role without `USAGE ON SCHEMA extensions`
+  cannot call `gen_random_uuid()` and every insert with a uuid default fails. The grants include it.
+- `ALTER DEFAULT PRIVILEGES` applies to tables created by the role that *runs* it, so it has to be executed
+  as the role that runs migrations (`postgres`, which is also who the Supabase SQL editor runs as). Run by
+  anyone else, the next migration quietly produces tables the services cannot read.
+
+Passwords are deliberately **not** in the generated file: roles are created `LOGIN` with no password, which
+cannot connect, and the operator sets one per role. So the file is safe to commit and nothing is reachable
+in the window between.
 
 ### Stage C — separate instances, on demand only
 
@@ -195,7 +219,7 @@ this change, every request to every service would become two.
 | --- | --- | --- |
 | 1 | Break the dependency cycles | **Yes** — clearer ownership. 2 of 3 done: `people↔workforce`, `work↔defects` |
 | 2 | Declared consumption contracts | **Yes** — the surface is documented and enforced. **Done** |
-| 3 | Stage B: role per service | **Yes** — isolation enforced by Postgres, not convention |
+| 3 | Stage B: role per service | **Yes** — isolation enforced by Postgres, not convention. **Built; SQL waiting to be applied** |
 | 4 | Outbox for domain events | **Yes** — an event can no longer be lost on a commit |
 | 5 | Idempotent subscribers | **Yes** — safe retries today |
 | 6 | RS256 tokens | Only at extraction |

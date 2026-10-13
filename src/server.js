@@ -10,6 +10,7 @@ const { logger, install: installLogger } = require('./platform/logger')
 const metrics = require('./platform/metrics')
 const errorTracking = require('./platform/error-tracking')
 const leader = require('./platform/leader')
+const db = require('./platform/db')
 const rateLimitStore = require('./middleware/rate-limit-store')
 // const path = require('path')
 
@@ -409,6 +410,14 @@ RATE LIMIT STORE UNUSABLE
       ? paint(32, 'leader') + paint(2, ` (advisory lock ${leader.CRON_LOCK_ID})`)
       : paint(33, 'standby') + paint(2, ` (${leader.status().reason || 'not leader'})`)}`)
   }
+  // Which services' pools connect as their own database role, so "is this
+  // isolated by the database or only by search_path?" is a line in the banner
+  // rather than a guess about which env vars someone remembered to set.
+  const scoped = db.scopedServices()
+  console.log(`   - DB:       ${scoped.length === 0
+    ? paint(2, 'shared credential (search_path isolation only)')
+    : paint(32, `${scoped.length}/5 scoped`) + paint(2, ` (${scoped.join(', ')})`)}`)
+
   // Rate limits apply to traffic, and a cron worker has none.
   if (SERVES_HTTP) {
     console.log(`   - Limits:   ${paint(2, `${rateLimitStore.configured()} store`

@@ -128,9 +128,41 @@ const ssl = process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false 
  * would be injected into the connection string. Anything not on this list is
  * refused.
  */
+const { SERVICE_NAMES, serviceOf, envVarFor } = require('./service-map')
+
 const MODULE_SCHEMAS = [
   'identity', 'work', 'defects', 'notify', 'integrations', 'files', 'workforce', 'people',
 ]
+
+/* ── One credential per service ──────────────────────────────────────────── */
+/**
+ * A module's pool connects as its SERVICE's role when that service has its own
+ * connection string, and as the shared DATABASE_URL when it does not.
+ *
+ * WHY IT IS WORTH DOING WHILE THIS IS STILL A MONOLITH
+ * `search_path` already stops a module reading a sibling's table, but only by
+ * convention: the path is a setting, and one role reaching every schema means a
+ * qualified name like `people.employee_profiles` still works from the `work`
+ * pool. With a role per service it does not — Postgres answers
+ * `42501 permission denied`. The thing npm run test:isolation tests becomes the
+ * thing the database enforces.
+ *
+ * NON-BREAKING BY CONSTRUCTION. With no DATABASE_URL_* variables set, every
+ * pool resolves to DATABASE_URL and this is exactly the previous behaviour.
+ * The roles can therefore be created, granted and pointed at one service at a
+ * time, and rolled back by unsetting a variable.
+ *
+ * See docs/db-roles.sql for the grants, generated from the same service map.
+ */
+const connectionFor = (schema) => {
+  const service = serviceOf(schema)
+  if (!service) return connectionString
+  return process.env[envVarFor(service)] || connectionString
+}
+
+/** Which services have their own credential — reported by the boot banner. */
+const scopedServices = () =>
+  SERVICE_NAMES.filter((service) => Boolean(process.env[envVarFor(service)]))
 
 const PER_MODULE_MAX = Number(process.env.DB_POOL_MAX_PER_MODULE) || 2
 const DEFAULT_MAX = Number(process.env.DB_POOL_MAX_DEFAULT) || 4
@@ -192,7 +224,7 @@ const forSchema = (schema) => {
   if (existing) return existing
 
   const pool = new Pool({
-    connectionString,
+    connectionString: connectionFor(schema),
     ssl,
     // libpq connection option, applied when each connection is established, so
     // there is no window where a query runs on the default path.
@@ -221,6 +253,14 @@ const forSchema = (schema) => {
 module.exports = defaultPool
 module.exports.forSchema = forSchema
 module.exports.MODULE_SCHEMAS = MODULE_SCHEMAS
+
+/**
+ * The services whose pools connect as their own role rather than the shared
+ * credential. Reported at boot so "which schemas are actually isolated by the
+ * database" is visible, not inferred from which env vars someone remembers
+ * setting.
+ */
+module.exports.scopedServices = scopedServices
 
 /** Every pool currently open, for diagnostics and shutdown. */
 module.exports.allPools = () => [defaultPool, ...poolsBySchema.values()]
