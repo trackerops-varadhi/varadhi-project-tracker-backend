@@ -251,7 +251,13 @@ within one `CRON_LEADER_RETRY_MS` instead of sweeps stopping until someone notic
 
 ### On Render
 
-`varadhi-backend` (web, `SERVICE_ROLE=web`) and `varadhi-cron` (worker, `SERVICE_ROLE=cron`). Every shared
+The live service is **`varadhi-project-tracker`** (web). `render.yaml` describes it as
+`SERVICE_ROLE=web` alongside a `varadhi-cron` worker, but **neither is in force**: there is no Blueprint
+instance on the account, so that file has never been applied and the worker does not exist. Today one
+service runs with `SERVICE_ROLE` unset — role `all` — and `ENABLE_CRON=false`, so no sweep runs anywhere.
+Giving the sweeps their own process means creating a Background Worker by hand, and paying for an instance.
+
+In the configuration that file describes, every shared
 secret on the worker is inherited with `fromService` rather than set twice — a sweep is not read-only: the
 calendar sync refreshes OAuth tokens and the Teams jobs read webhook URLs, both encrypted at rest with
 `ENCRYPTION_KEY`. A worker holding a different key would not fail loudly; it would fail to decrypt every

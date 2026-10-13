@@ -1,15 +1,43 @@
 # Production deployment runbook — Varadhi backend
 
 Branch: `refactor/phase1-module-boundaries`. Target: the existing Render web service
-`varadhi-backend` plus the production Supabase database.
+**`varadhi-project-tracker`** plus the production Supabase database.
 
-**Read this first.** Production is still **pre-split**: its tables live in `public` and
-there are no module schemas. This branch's pools require the module schemas to exist
-(`src/platform/db.js` sets `search_path=<module>,extensions`). Nothing in `render.yaml`
-runs migrations, and the API no longer migrates at boot. **A deploy before the database
-migration is an outage, not a degraded mode.**
+> ## STATUS: THE SPLIT IS DONE. §§1–2 ARE HISTORY.
+>
+> This runbook was written before the cutover and read as though it were still pending.
+> It is not. Checked 2026-10-13:
+>
+> ```
+> GET https://varadhi-project-tracker.onrender.com/health/ready
+> {"status":"ready","environment":"production",
+>  "checks":{"database":{"ok":true},"schemas":{"ok":true,"count":8},
+>            "pools":{"ok":true,"count":8}}}
+> ```
+>
+> Production ran the split on **2026-10-05** and Module 9 (people) plus the QC role on
+> **2026-10-09**. Eight module schemas exist, every pool connects, and every DDL script
+> in `docs/` has been applied — `docs/SCHEMA.md` is the readable picture of what they
+> produced.
+>
+> So **do not run §1 or §2 against production.** They describe a migration that has
+> already happened, and re-running a cutover script is at best refused by its own
+> ledger guard and at worst destructive. They are kept because the rehearsal method and
+> the verification queries are still the right ones for the NEXT schema change.
+>
+> For an ordinary deploy today, start at **§3** and use **§6** and **§8**.
+
+**Still true, and the reason the order below exists.** Nothing in `render.yaml` runs
+migrations, and the API does not migrate at boot, so the schemas must exist before the
+app starts (`src/platform/db.js` sets `search_path=<module>,extensions`, with no
+`public`). For any FUTURE schema change: **a deploy before the database migration is an
+outage, not a degraded mode.**
 
 Order, always: **migrate → verify → deploy → verify → smoke test.**
+
+**`render.yaml` is documentation, not configuration.** There is no Blueprint instance on
+the account; the live service was created and is configured in the dashboard by hand.
+Applying that file would create new services rather than adopt the live one.
 
 Steps marked **[APPROVAL]** must not be executed without the account owner's explicit
 go-ahead. Steps marked **[DBA]** need production database access.
