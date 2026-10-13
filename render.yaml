@@ -1,3 +1,17 @@
+# THIS FILE HAS NEVER BEEN APPLIED. It is documentation, not the live config.
+#
+# Checked 2026-10-13: the Render account has NO Blueprint instance, and the one
+# live service was created and is configured in the dashboard by hand. So
+# nothing here is in force -- every value below describes what the deployment
+# SHOULD hold, and the dashboard is the authority for what it DOES hold.
+#
+# Two consequences worth knowing before trusting a line of it:
+#   * Applying it as a Blueprint would CREATE services, including the paid
+#     worker below, rather than adopt the existing one.
+#   * It said `varadhi-backend` until 2026-10-13, which is not the service's
+#     name -- and a URL built from that name 404s. The live service is
+#     `varadhi-project-tracker`.
+#
 # MIGRATIONS ARE NOT RUN BY THIS FILE. Read before deploying.
 #
 # Neither buildCommand nor startCommand migrates, and the API no longer migrates
@@ -14,7 +28,7 @@
 #
 # TWO SERVICES, ONE CODEBASE
 #
-# `varadhi-backend` serves HTTP and runs no sweeps (SERVICE_ROLE=web).
+# `varadhi-project-tracker` serves HTTP and runs no sweeps (SERVICE_ROLE=web).
 # `varadhi-cron` runs the sweeps and binds no port (SERVICE_ROLE=cron).
 #
 # Same repo, same build, same image — only SERVICE_ROLE differs. See the role
@@ -29,8 +43,12 @@
 # a change to one service that cannot affect the API. Until it is flipped, no
 # sweep runs anywhere — which is exactly what production does today.
 #
-# A Render `worker` is not on the free plan. This blueprint therefore costs one
-# more paid instance than it did; decide that before applying it.
+# A Render `worker` is not on the free plan, and since no Blueprint is connected
+# the worker below does not exist and will not appear on its own. Running the
+# sweeps as their own process means creating a Background Worker in the
+# dashboard by hand -- same repo, same build, `SERVICE_ROLE=cron` -- and paying
+# for one more instance. Nothing needs it today: ENABLE_CRON is false and no
+# sweep runs anywhere.
 #
 # TWO THINGS THIS FILE DOES NOT CONFIGURE, both deliberate:
 #   RATE_LIMIT_STORE  unset means the in-memory store, which is correct for a
@@ -45,7 +63,7 @@
 #                     the value points at before deploying.
 services:
   - type: web
-    name: varadhi-backend
+    name: varadhi-project-tracker
     # `runtime` replaced the deprecated `env` key in Render's current schema.
     runtime: node
     buildCommand: npm install
@@ -138,7 +156,7 @@ services:
       # registered with Google/Microsoft must match exactly, and deriving it
       # from the inbound request is wrong behind Render's proxy.
       - key: API_PUBLIC_URL
-        value: https://varadhi-backend.onrender.com
+        value: https://varadhi-project-tracker.onrender.com
       # Calendar providers. WITHOUT these the module runs against a built-in
       # mock calendar rather than failing — real sync stays off until they are
       # set in the dashboard.
@@ -192,26 +210,26 @@ services:
         value: "60000"
       - key: JWT_SECRET
         fromService:
-          name: varadhi-backend
+          name: varadhi-project-tracker
           type: web
           envVarKey: JWT_SECRET
       # Deep links in the notifications these sweeps send.
       - key: FRONTEND_URL
         value: https://varadhi-project-tracker.vercel.app
       - key: API_PUBLIC_URL
-        value: https://varadhi-backend.onrender.com
+        value: https://varadhi-project-tracker.onrender.com
       - key: NOTIFICATION_ACTION_TTL_HOURS
         value: "72"
       # Push. Same reasoning as the web service: without BOTH keys the channel
       # is a silent no-op, so a sweep would reach in-app and email but not push.
       - key: VAPID_PUBLIC_KEY
         fromService:
-          name: varadhi-backend
+          name: varadhi-project-tracker
           type: web
           envVarKey: VAPID_PUBLIC_KEY
       - key: VAPID_PRIVATE_KEY
         fromService:
-          name: varadhi-backend
+          name: varadhi-project-tracker
           type: web
           envVarKey: VAPID_PRIVATE_KEY
       - key: VAPID_SUBJECT
@@ -220,36 +238,36 @@ services:
       # sweep cannot do its job without this matching the web service exactly.
       - key: ENCRYPTION_KEY
         fromService:
-          name: varadhi-backend
+          name: varadhi-project-tracker
           type: web
           envVarKey: ENCRYPTION_KEY
       # Aadhaar at rest. No sweep writes one today, but the people module's jobs
       # load profiles, and a mismatched key here would read them as corrupt.
       - key: PII_ENCRYPTION_KEY
         fromService:
-          name: varadhi-backend
+          name: varadhi-project-tracker
           type: web
           envVarKey: PII_ENCRYPTION_KEY
       # The calendar sweep refreshes provider tokens, so it needs the same
       # client credentials the web service uses to obtain them.
       - key: GOOGLE_CLIENT_ID
         fromService:
-          name: varadhi-backend
+          name: varadhi-project-tracker
           type: web
           envVarKey: GOOGLE_CLIENT_ID
       - key: GOOGLE_CLIENT_SECRET
         fromService:
-          name: varadhi-backend
+          name: varadhi-project-tracker
           type: web
           envVarKey: GOOGLE_CLIENT_SECRET
       - key: MS_CLIENT_ID
         fromService:
-          name: varadhi-backend
+          name: varadhi-project-tracker
           type: web
           envVarKey: MS_CLIENT_ID
       - key: MS_CLIENT_SECRET
         fromService:
-          name: varadhi-backend
+          name: varadhi-project-tracker
           type: web
           envVarKey: MS_CLIENT_SECRET
 
