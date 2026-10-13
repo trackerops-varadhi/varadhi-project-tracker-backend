@@ -353,6 +353,21 @@ async function main() {
     const r6 = runner(['up', '--allow-remote'], { DATABASE_URL: unknown })
     check('unknown hosted database refused even with --allow-remote',
       !r6.ok && /UNRECOGNISED/.test(r6.out), r6.out.slice(-200))
+
+    // The ref is extracted from the pooler username, and the per-service roles
+    // added for database isolation connect as `svc_<service>.<ref>` rather than
+    // `postgres.<ref>`. While the pattern matched only `postgres.`, these URLs
+    // produced no ref at all and the production refusal above — which is keyed
+    // on the ref — did not fire for them.
+    const prodAsService = 'postgresql://svc_core.ostmlxuzhprymlchmmak:x@aws-1-ap-south-1.pooler.supabase.com:5432/postgres'
+    const r7 = runner(['status'], { DATABASE_URL: prodAsService })
+    check('production refused when connecting as a service role',
+      !r7.ok && /THIS IS PRODUCTION/.test(r7.out), r7.out.slice(-200))
+
+    const devAsService = 'postgresql://svc_integrations.dbuiauuhajwwpisjevpk:x@aws-1-ap-south-1.pooler.supabase.com:5432/postgres'
+    const r8 = runner(['up'], { DATABASE_URL: devAsService })
+    check('a service role still resolves dev, so remote rules apply',
+      !r8.ok && /--allow-remote/.test(r8.out), r8.out.slice(-200))
   }
 
   /* 10. leave the scratch database in a known good state */

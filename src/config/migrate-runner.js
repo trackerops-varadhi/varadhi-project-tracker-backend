@@ -102,8 +102,14 @@ const resolveTarget = () => {
   const url = process.env.DATABASE_URL || ''
   const user = url.match(/^postgres(?:ql)?:\/\/([^:@]+)/)?.[1] || ''
   const host = url.match(/^postgres(?:ql)?:\/\/[^@]+@([^:/?]+)/)?.[1] || '(unparseable)'
+  // ANY role, not just `postgres`. Supavisor's username is `<role>.<ref>`, and
+  // the per-service roles (svc_core, svc_hr, ...) introduced for the database
+  // isolation work connect as `svc_integrations.<ref>`. Matching only
+  // `postgres.<ref>` meant those URLs produced ref = null — so the production
+  // refusal below, which is keyed on the ref, would not have fired for them.
+  // A guard that recognises fewer production URLs than exist is not a guard.
   const ref =
-    user.match(/^postgres\.([a-z0-9]{16,})$/)?.[1] ||
+    user.match(/^[a-z0-9_]+\.([a-z0-9]{16,})$/)?.[1] ||
     host.match(/^db\.([a-z0-9]{16,})\.supabase\.co$/)?.[1] ||
     null
   const loopback = ['127.0.0.1', 'localhost', '::1'].includes(host)
