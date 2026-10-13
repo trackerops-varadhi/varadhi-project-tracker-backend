@@ -1,6 +1,7 @@
 // Task business logic: shaping, scoping and notification fan-out.
 
 const repo = require('./repo')
+const linkedBugs = require('./linked-bugs')
 const identity = require('../identity')
 const notify = require('../notify')
 const {
@@ -61,10 +62,11 @@ async function getTasksWithDetails(taskIds) {
     repo.findTaskRows(ids),
     repo.findCommentsForTasks(ids),
     // Role workspaces: a task created for a bug carries that bug's details, so
-    // the developer sees severity, steps and attachments without the Bugs
-    // module. Lazy require — defects depends on work, not the other way round
-    // at load time.
-    require('../defects').getBugCardsForTasks(ids),
+    // the developer sees severity, steps and attachments without opening the
+    // Bugs module. Asked through this module's own port rather than by
+    // requiring defects back — that require was a dependency cycle. See
+    // linked-bugs.js.
+    linkedBugs.bugCardsFor(ids),
   ])
   if (rows.length === 0) return []
 

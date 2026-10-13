@@ -5,9 +5,16 @@
 
 const slaCron = require('./sla-cron')
 const workSubscriber = require('./work-subscriber')
+const work = require('../work')
 
 exports.mount = [
   { path: '/api/bugs', router: require('./routes') },
+  // The project detail page's Bugs tab. A bugs route under a projects path:
+  // the URL belongs to projects, the handler belongs here. Express tries
+  // routers in mount order and this router declares only `/:id/bugs`, so every
+  // other /api/projects request passes through to work's router untouched.
+  // See project-bugs.routes.js for why it moved out of work.
+  { path: '/api/projects', router: require('./project-bugs.routes') },
 ]
 
 /* ── Event subscriptions ────────────────────────────────────────────────── */
@@ -16,7 +23,13 @@ exports.mount = [
 // and to the tasks deleted with it — the two ON DELETE SET NULL rules the
 // schema split dropped. Called by server.js outside the ENABLE_CRON switch.
 // Idempotent.
-exports.subscribe = () => workSubscriber.startWorkSubscriptions()
+exports.subscribe = () => {
+  workSubscriber.startWorkSubscriptions()
+  // work shows the bug behind a linked task but does not own it. Answering
+  // that here keeps the dependency pointing one way: defects -> work.
+  work.setBugCardProvider(exports.getBugCardsForTasks)
+  console.log('[defects] subscribed — bug-card provider registered with work')
+}
 exports.unsubscribe = () => workSubscriber.stopWorkSubscriptions()
 
 /* ── Background jobs ────────────────────────────────────────────────────── */
@@ -35,20 +48,6 @@ exports.jobs = [
 exports.runSlaSweepNow = slaCron.runBugSlaSweepNow
 
 /* ── Cross-module API ───────────────────────────────────────────────────── */
-
-/**
- * The project detail page's Bugs tab, served under /api/projects/:id/bugs.
- *
- * TEMPORARY SHAPE: this is an express handler rather than a data function
- * because routes/projects.routes.js currently imports the bugs controller
- * directly — one of the cross-controller couplings this restructure exists to
- * remove. Exposing it here at least routes that coupling through a public
- * interface instead of a deep import.
- *
- * When work migrates, its routes should call an async data accessor here
- * instead and own the response shaping themselves.
- */
-exports.projectBugsHandler = require('./controller').getBugsByProject
 
 /**
  * The bug behind each linked task, for the task list and task detail

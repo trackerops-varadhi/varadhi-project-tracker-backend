@@ -28,9 +28,14 @@
  * It is not a migration tool, and it writes nothing to any database. Every
  * query here is a SELECT against catalogs — information_schema, pg_catalog,
  * pg_indexes — plus `max(name)` on each module's own ledger. There is no DDL,
- * no INSERT/UPDATE/DELETE, and no table data is read: `reltuples` is the
- * planner's own estimate, taken because it is free, and is labelled as an
- * estimate because that is what it is.
+ * no INSERT/UPDATE/DELETE, and no table data is read at all.
+ *
+ * NO ROW COUNTS, DELIBERATELY. The first version printed `reltuples`, the
+ * planner's own estimate, because it was free. Free is not a reason: it made
+ * the document churn whenever data changed, so `--check` failed after an
+ * ordinary test run and reported "out of date" about a schema that had not
+ * moved. A schema document describes shape, and `--check` now means exactly one
+ * thing.
  *
  * SAFETY
  * Production is refused by project ref, using PROD_REF imported from
@@ -120,16 +125,6 @@ const renderDefault = (raw) => {
 
 const escapePipes = (s) => String(s).replace(/\|/g, '\\|')
 
-/**
- * `reltuples` is -1, not 0, for a table ANALYZE has never visited — Postgres 14
- * made that distinction explicit so a planner could tell "empty" from
- * "unknown". Printing "~-1 rows" would be worse than printing nothing.
- */
-const renderRows = (approx) =>
-  approx === null || approx === undefined || approx < 0
-    ? 'row count not analysed'
-    : `~${approx} rows (planner estimate)`
-
 /* ── Introspection (every query read-only) ────────────────────────────────── */
 
 async function introspect(pool) {
@@ -156,14 +151,14 @@ async function introspect(pool) {
 
   // `public` by name only. See the OWNED comment above for why.
   const { rows: publicTables } = await pool.query(`
-    SELECT c.relname AS name, c.reltuples::bigint AS approx
+    SELECT c.relname AS name
       FROM pg_class c
       JOIN pg_namespace n ON n.oid = c.relnamespace
      WHERE n.nspname = 'public' AND c.relkind = 'r'
      ORDER BY c.relname
   `)
 
-  const [columns, constraints, indexes, approx, enums, views] = await Promise.all([
+  const [columns, constraints, indexes, enums, views] = await Promise.all([
     pool.query(`
       SELECT c.table_schema AS schema, c.table_name AS table, c.column_name AS column,
              c.ordinal_position, c.data_type, c.udt_name,
@@ -194,14 +189,6 @@ async function introspect(pool) {
        ORDER BY schemaname, tablename, indexname
     `, [schemas]),
 
-    // The planner's estimate, not a count. Free, and never touches a row.
-    pool.query(`
-      SELECT n.nspname AS schema, c.relname AS table, c.reltuples::bigint AS approx
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE c.relkind = 'r' AND n.nspname = ANY($1)
-    `, [schemas]),
-
     pool.query(`
       SELECT n.nspname AS schema, t.typname AS name,
              string_agg(e.enumlabel, ', ' ORDER BY e.enumsortorder) AS labels
@@ -228,7 +215,6 @@ async function introspect(pool) {
     columns: columns.rows,
     constraints: constraints.rows,
     indexes: indexes.rows,
-    approx: approx.rows,
     enums: enums.rows,
     views: views.rows,
   }
@@ -277,7 +263,6 @@ function render(data, ledger, target) {
   const byTable = groupBy(data.columns, (r) => `${r.schema}.${r.table}`)
   const consByTable = groupBy(data.constraints, (r) => `${r.schema}.${r.table}`)
   const idxByTable = groupBy(data.indexes, (r) => `${r.schema}.${r.table}`)
-  const approxByTable = new Map(data.approx.map((r) => [`${r.schema}.${r.table}`, r.approx]))
   const viewsBySchema = groupBy(data.views, (r) => r.schema)
 
   const L = []
@@ -363,7 +348,6 @@ function render(data, ledger, target) {
       const cols = byTable.get(qualified)
       const cons = consByTable.get(qualified) || []
       const idx = idxByTable.get(qualified) || []
-      const rows = approxByTable.get(qualified)
 
       // The primary key's columns, so they can be marked in the column table
       // rather than only described underneath it.
@@ -374,7 +358,7 @@ function render(data, ledger, target) {
 
       L.push(`### \`${schema}.${name}\``)
       L.push('')
-      L.push(`${cols.length} columns · ${renderRows(rows)}`)
+      L.push(`${cols.length} columns`)
       L.push('')
       L.push('| Column | Type | Null | Default |')
       L.push('| --- | --- | --- | --- |')

@@ -3,17 +3,6 @@ const ctrl = require('./projects.controller')
 const tasksCtrl = require('./tasks.controller')
 const { protect, restrictTo } = require('../../middleware/auth.middleware')
 
-// Resolved per-request, not at load time. `defects` and `work` form a require
-// cycle — defects/index.js -> controller.js -> '../work' -> work/index.js ->
-// this file -> '../defects' — so whichever module is required first sees the
-// other half-built. Reading `.projectBugsHandler` at load time captures
-// `undefined` by value and express throws "requires a callback function".
-// server.js happens to require identity and defects before work, which is why
-// the server boots; anything entering through work first (the bugs test suite)
-// hits it. Deferring the lookup to request time removes the ordering dependency
-// instead of relying on it.
-const defects = () => require('../defects')
-
 router.use(protect)
 
 router.get('/', ctrl.getAllProjects)
@@ -29,10 +18,12 @@ router.delete('/:id/members/:userId', restrictTo('admin', 'manager'), ctrl.remov
 // route file importing a sibling controller.
 router.get('/:id/tasks', tasksCtrl.getTasksByProject)
 
-// The Bugs tab. Paginated and role-scoped by the same service /api/bugs uses,
-// so it cannot widen visibility. Reached through the defects module's public
-// interface — still a cross-domain edge, but no longer a deep import.
-// Role workspaces: bugs are QC's, so only admin and qc reach this tab.
-router.get('/:id/bugs', restrictTo('admin', 'qc'), (req, res, next) => defects().projectBugsHandler(req, res, next))
+// GET /:id/bugs — the Bugs tab — is NOT declared here. It lives in
+// defects/project-bugs.routes.js, mounted on /api/projects by the module that
+// owns bugs. This file reaching for defects.projectBugsHandler was half of the
+// work <-> defects cycle, and it also needed a lazy require because whichever
+// of the two modules loaded first saw the other half-built. Express tries
+// routers in mount order and defects mounts before work, so the URL is
+// unchanged.
 
 module.exports = router

@@ -13,6 +13,17 @@
  *   3 absence calendar                    4 balances + entitlements
  *   5 daily work status                   6 attendance register
  *   7 nudge + escalation sweeps
+ *
+ * ! THIS SUITE RUNS A GLOBAL SWEEP. Before running it against a database other
+ *   people use, blank EMAIL_USER, EMAIL_PASS, VAPID_PUBLIC_KEY and
+ *   VAPID_PRIVATE_KEY for BOTH the API process and this one. Email and push
+ *   degrade to a no-op without them, by design.
+ *
+ *   The sweep scans every row, not just the ZZ fixtures, so it notifies real
+ *   users about real records. Measured on dev 2026-10-13: 5 in-app rows for 4
+ *   real users, and with live credentials that would have been 5 emails and 5
+ *   push messages nobody asked for. The suite cleans up its own fixtures; it
+ *   cannot clean up a notification it caused for someone else.
  */
 
 require('dotenv').config()

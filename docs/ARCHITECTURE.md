@@ -281,16 +281,16 @@ This is a **modular monolith**, not microservices: one codebase, two processes (
 function call through `index.js`. The boundaries are service-shaped so a module *can* leave later. Measured,
 here is how close that actually is.
 
-### 26 cross-module edges, and one knot
+### 25 cross-module edges, and one knot
 
 | Module | Depended on by | Depends on |
 | --- | --- | --- |
 | `identity` | **8** | notify, work |
-| `work` | 7 | defects, identity, notify |
+| `work` | 7 | identity, notify |
 | `notify` | 7 | identity, work |
 | `files` | 2 | identity, notify, work |
-| `defects` | 1 | files, identity, notify, work |
 | `workforce` | 1 | identity, notify, work |
+| **`defects`** | **0** | files, identity, notify, work |
 | **`insights`** | **0** | identity, work |
 | **`integrations`** | **0** | identity, notify, work |
 | **`people`** | **0** | files, identity, notify, workforce |
@@ -299,19 +299,57 @@ One strongly-connected component — modules that are mutually reachable, and th
 not at all:
 
 ```
-{ defects <-> files <-> identity <-> notify <-> work }
+{ identity <-> notify <-> work }
 ```
 
-14 of the 26 edges take part in it. Node's circular `require` is already worked around with the lazy
+6 of the 25 edges take part in it, and they are the three modules every other one reads from. Node's circular `require` is already worked around with the lazy
 `const notify = () => require('../notify')` form, which hides the cycle from Node but does not remove it:
 over HTTP a lazy require is just a lazy client, and the cycle is still two services that each need the other
 to start.
 
-Those 14 are recorded in `scripts/module-graph.baseline.json`. **New ones fail the check.** The point is not
-that the current ones are fine — it is that they are a known, bounded piece of work, and a fifteenth
-appearing by accident is not.
+Those 6 are recorded in `scripts/module-graph.baseline.json`. **New ones fail the check.** The point is not
+that the current ones are fine — it is that they are a known, bounded piece of work, and a seventh appearing
+by accident is not.
 
-### The one cycle that has been broken: `people` ↔ `workforce`
+### Broken cycle 2: `work` ↔ `defects` — two call sites, two knots dissolved
+
+`defects` depends on `work` for good reasons: its task-sync creates the task a developer works a bug
+through, and its work-subscriber mirrors that task's status back onto the bug. `work` depended on `defects`
+in exactly two places, and they needed opposite fixes.
+
+**`GET /api/projects/:id/bugs`** — the project page's Bugs tab — was declared in
+`work/projects.routes.js`, which reached for `defects.projectBugsHandler` to serve it. That was never a
+data dependency: the URL belongs to projects, the handler belongs to bugs. A module can mount a path prefix
+it does not own, so the route moved to `defects/project-bugs.routes.js`, mounted on `/api/projects`. Express
+tries routers in mount order and that router declares only `/:id/bugs`, so every other `/api/projects`
+request passes through to work's router, and `/:id/bugs` cannot be shadowed by work's `/:id` — different
+numbers of path segments. The URL and its roles are unchanged.
+
+That also deleted a fifteen-line comment explaining that the lazy require existed because whichever of the
+two modules loaded first saw the other half-built, and that the server only booted because `server.js`
+happened to require `defects` before `work`.
+
+**The bug behind a linked task** — severity, steps, attachments, shown so a developer never opens the Bugs
+module — is a real read dependency, and it got a port: `work/linked-bugs.js`, registered by
+`defects.subscribe()`. It fails soft on purpose: with no provider, tasks render without the bug badge. A
+task list that refuses to load because a sibling module is unavailable would be the worse outcome, and
+"unavailable" stops being hypothetical the day defects is its own service.
+
+**The result was out of proportion to the change.** Two call sites took the knot from five modules to three:
+
+```
+before   { defects <-> files <-> identity <-> notify <-> work }    14 cyclic edges
+after    { identity <-> notify <-> work }                           6 cyclic edges
+```
+
+`files` fell out too, without being touched — it was only ever in a cycle by way of
+`work -> defects -> files`. Extractable modules went from two to four.
+
+Verified by `npm run test:bugs`: 150 passed, 0 failed. Its section 13 already covered the moved route
+(admin 200, project-scoped, manager 403) and its section 9 the bug card (severity, steps, QC reporter, the
+task list), so the existing suite was the right proof for both halves.
+
+### Broken cycle 1: `people` ↔ `workforce`
 
 `people` requires `workforce` for attendance and leave, so the HR views can show who is in and who is away.
 That direction is right. `workforce` used to require `people` back for exactly one function in two places —
@@ -336,8 +374,8 @@ registered.
 
 ### Extractable today
 
-`insights`, `integrations` and — since the cycle above was broken — `people`. Nothing depends on any of
-them, so nothing has to learn to call them over a network, and none sits in a knot.
+`defects`, `insights`, `integrations` and `people` — four of nine. Nothing depends on any of them, so nothing
+has to learn to call them over a network, and none sits in a knot.
 
 **`integrations` is the better first candidate**: it is already event-driven (`work-subscriber.js`), and its
 work is slow outbound I/O to Google, Microsoft and Teams — exactly what you want off the request path. If it

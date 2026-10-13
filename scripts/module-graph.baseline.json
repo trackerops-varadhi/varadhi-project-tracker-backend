@@ -1,19 +1,11 @@
 {
   "note": "Cross-module requires that take part in a cycle. A cycle cannot be extracted into its own service, so new ones fail the check. Shrink this list; do not grow it. Regenerate deliberately with: npm run lint:boundaries -- --update-baseline",
-  "updated": "2026-10-12",
+  "updated": "2026-10-13",
   "cyclicEdges": [
-    "defects->files",
-    "defects->identity",
-    "defects->notify",
-    "defects->work",
-    "files->identity",
-    "files->notify",
-    "files->work",
     "identity->notify",
     "identity->work",
     "notify->identity",
     "notify->work",
-    "work->defects",
     "work->identity",
     "work->notify"
   ]

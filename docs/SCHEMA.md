@@ -4,7 +4,7 @@
      Regenerate with: npm run schema:doc
      Source: scripts/gen-schema-doc.js -->
 
-Generated **2026-10-12 12:11 UTC** from the **development (Supabase)** database.
+Generated **2026-10-13 12:14 UTC** from the **development (Supabase)** database.
 
 This file is generated from a live database, never read by the application, and nothing migrates from it. The authority for the schema remains `migrations/<module>/*.js`; this is the readable view of what those migrations have produced. If it disagrees with the database it is out of date — run `npm run schema:doc`.
 
@@ -34,7 +34,7 @@ module. This is the position the rest of this document was read at.
 
 ### `identity.rate_limit_buckets`
 
-3 columns · ~5 rows (planner estimate)
+3 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -48,7 +48,7 @@ Indexes:
 
 ### `identity.user_sessions`
 
-13 columns · ~282 rows (planner estimate)
+13 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -79,7 +79,7 @@ Indexes:
 
 ### `identity.user_tokens`
 
-13 columns · ~358 rows (planner estimate)
+13 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -113,7 +113,7 @@ Indexes:
 
 ### `identity.users`
 
-12 columns · ~15 rows (planner estimate)
+12 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -142,7 +142,7 @@ Constraints:
 
 ### `work.comments`
 
-6 columns · ~3 rows (planner estimate)
+6 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -159,7 +159,7 @@ Constraints:
 
 ### `work.project_members`
 
-3 columns · ~18 rows (planner estimate)
+3 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -173,7 +173,7 @@ Constraints:
 
 ### `work.projects`
 
-9 columns · ~10 rows (planner estimate)
+9 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -193,7 +193,7 @@ Constraints:
 
 ### `work.tasks`
 
-18 columns · ~25 rows (planner estimate)
+18 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -229,7 +229,7 @@ Constraints:
 
 ### `defects.bug_activity_logs`
 
-9 columns · ~36 rows (planner estimate)
+9 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -254,7 +254,7 @@ Indexes:
 
 ### `defects.bug_attachments`
 
-10 columns · row count not analysed
+10 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -279,7 +279,7 @@ Indexes:
 
 ### `defects.bug_comments`
 
-7 columns · ~2 rows (planner estimate)
+7 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -301,7 +301,7 @@ Indexes:
 
 ### `defects.bug_sla_rules`
 
-9 columns · row count not analysed
+9 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -325,7 +325,7 @@ Constraints:
 
 ### `defects.bugs`
 
-29 columns · ~7 rows (planner estimate)
+29 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -390,7 +390,7 @@ Indexes:
 
 ### `notify.notification_action_log`
 
-10 columns · ~39 rows (planner estimate)
+10 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -416,7 +416,7 @@ Indexes:
 
 ### `notify.notification_logs`
 
-9 columns · ~23 rows (planner estimate)
+9 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -438,7 +438,7 @@ Indexes:
 
 ### `notify.notification_preferences`
 
-24 columns · ~34 rows (planner estimate)
+24 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -473,7 +473,7 @@ Constraints:
 
 ### `notify.notification_snoozes`
 
-6 columns · row count not analysed
+6 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -494,7 +494,7 @@ Indexes:
 
 ### `notify.notifications`
 
-15 columns · ~1446 rows (planner estimate)
+15 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -522,7 +522,7 @@ Indexes:
 
 ### `notify.push_delivery_retries`
 
-13 columns · ~0 rows (planner estimate)
+13 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -552,7 +552,7 @@ Indexes:
 
 ### `notify.push_subscriptions`
 
-7 columns · ~0 rows (planner estimate)
+7 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -578,7 +578,7 @@ Indexes:
 
 ### `integrations.calendar_connections`
 
-14 columns · ~2 rows (planner estimate)
+14 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -610,7 +610,7 @@ Indexes:
 
 ### `integrations.calendar_event_links`
 
-14 columns · ~2 rows (planner estimate)
+14 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -644,7 +644,7 @@ Indexes:
 
 ### `integrations.calendar_sync_conflicts`
 
-11 columns · ~0 rows (planner estimate)
+11 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -673,7 +673,7 @@ Indexes:
 
 ### `integrations.calendar_sync_settings`
 
-14 columns · ~2 rows (planner estimate)
+14 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -701,7 +701,7 @@ Constraints:
 
 ### `integrations.teams_delivery_log`
 
-12 columns · ~0 rows (planner estimate)
+12 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -730,7 +730,7 @@ Indexes:
 
 ### `integrations.teams_webhooks`
 
-15 columns · ~2 rows (planner estimate)
+15 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -765,7 +765,7 @@ Indexes:
 
 ### `files.documents`
 
-12 columns · ~30 rows (planner estimate)
+12 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -793,7 +793,7 @@ Indexes:
 
 ### `files.folders`
 
-5 columns · ~3 rows (planner estimate)
+5 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -813,7 +813,7 @@ Constraints:
 
 ### `workforce.daily_work_status`
 
-8 columns · row count not analysed
+8 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -836,7 +836,7 @@ Indexes:
 
 ### `workforce.leave_balances`
 
-9 columns · row count not analysed
+9 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -857,7 +857,7 @@ Constraints:
 
 ### `workforce.leave_requests`
 
-16 columns · ~7 rows (planner estimate)
+16 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -892,7 +892,7 @@ Indexes:
 
 ### `workforce.time_logs`
 
-10 columns · ~2 rows (planner estimate)
+10 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -922,7 +922,7 @@ Indexes:
 
 ### `people.candidate_resumes`
 
-8 columns · row count not analysed
+8 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -945,7 +945,7 @@ Indexes:
 
 ### `people.candidates`
 
-17 columns · row count not analysed
+17 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -979,7 +979,7 @@ Indexes:
 
 ### `people.employee_exits`
 
-14 columns · row count not analysed
+14 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -1012,7 +1012,7 @@ Indexes:
 
 ### `people.employee_profiles`
 
-26 columns · row count not analysed
+26 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |
@@ -1058,7 +1058,7 @@ Indexes:
 
 ### `people.interviews`
 
-16 columns · row count not analysed
+16 columns
 
 | Column | Type | Null | Default |
 | --- | --- | --- | --- |

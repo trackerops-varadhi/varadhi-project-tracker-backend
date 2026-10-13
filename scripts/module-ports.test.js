@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 /**
- * Module port wiring — workforce's org-chart port.
+ * Module port wiring — the questions a module asks and does not answer.
  *
  *     npm run test:ports
+ *
+ * Two ports so far, both created to break a dependency cycle:
+ *   workforce/org.js        who does this person report to?   answered by people
+ *   work/linked-bugs.js     which bug is this task from?      answered by defects
  *
  * NO DATABASE, NO RUNNING API. Every other test:* harness in this repo drives
  * the live API on :5000; this one deliberately does not touch either, because
@@ -48,6 +52,8 @@ const check = (name, fn) => {
 
 async function main() {
   console.log('\nModule port wiring\n')
+
+  console.log('workforce/org - the org chart, answered by people')
 
   // Required directly: this is a test about the port, not about the module's
   // HTTP surface, and loading workforce/index.js would pull in its routes.
@@ -138,6 +144,90 @@ async function main() {
       })
 
     assert.deepStrictEqual(offenders, [], `workforce still requires people in: ${offenders.join(', ')}`)
+  })
+
+  console.log('')
+  console.log('work/linked-bugs - the bug behind a task, answered by defects')
+
+  const linkedBugs = require('../src/modules/work/linked-bugs')
+
+  await check('with no provider registered, the map is empty rather than a throw', async () => {
+    assert.strictEqual(linkedBugs.hasBugCardProvider(), false)
+    assert.strictEqual((await linkedBugs.bugCardsFor(['t1', 't2'])).size, 0)
+  })
+
+  await check('an empty or all-falsy id list never calls the provider', async () => {
+    let called = false
+    linkedBugs.setBugCardProvider(async () => { called = true; return new Map() })
+    assert.strictEqual((await linkedBugs.bugCardsFor([])).size, 0)
+    assert.strictEqual((await linkedBugs.bugCardsFor([null, undefined, ''])).size, 0)
+    assert.strictEqual(called, false, 'provider was called for nothing to resolve')
+  })
+
+  await check('task ids are de-duplicated before the provider sees them', async () => {
+    let seen = null
+    linkedBugs.setBugCardProvider(async (ids) => { seen = ids; return new Map() })
+    await linkedBugs.bugCardsFor(['t1', 't1', 't2', 't1'])
+    assert.deepStrictEqual(seen, ['t1', 't2'])
+  })
+
+  // Most tasks are not bugs, so the common case is a provider returning fewer
+  // entries than it was asked about. tasks.service reads the result with
+  // `?? null`, so a missing key must stay missing rather than become undefined.
+  await check('tasks with no bug are simply absent from the map', async () => {
+    linkedBugs.setBugCardProvider(async () => new Map([['t2', { key: 'BUG-7' }]]))
+    const map = await linkedBugs.bugCardsFor(['t1', 't2'])
+    assert.strictEqual(map.has('t1'), false)
+    assert.strictEqual(map.get('t2').key, 'BUG-7')
+  })
+
+  await check('a provider returning nothing at all degrades to an empty map', async () => {
+    linkedBugs.setBugCardProvider(async () => undefined)
+    assert.strictEqual((await linkedBugs.bugCardsFor(['t1'])).size, 0)
+  })
+
+  await check('registering a non-function is refused', () => {
+    assert.throws(() => linkedBugs.setBugCardProvider(null), TypeError)
+    assert.throws(() => linkedBugs.setBugCardProvider('defects'), TypeError)
+  })
+
+  await check('defects.subscribe() is what registers the provider', () => {
+    const defects = require('../src/modules/defects')
+    const work = require('../src/modules/work')
+
+    assert.strictEqual(typeof defects.subscribe, 'function')
+    assert.strictEqual(
+      typeof work.setBugCardProvider, 'function',
+      'work must expose the port on its public surface'
+    )
+
+    defects.subscribe()
+    assert.strictEqual(work.hasBugCardProvider(), true)
+
+    // server.js calls subscribe() for every module on every boot.
+    defects.subscribe()
+    assert.strictEqual(work.hasBugCardProvider(), true)
+
+    defects.unsubscribe()
+  })
+
+  await check('work does not require defects - the cycle is gone', () => {
+    const fs = require('fs')
+    const path = require('path')
+    const dir = path.join(__dirname, '..', 'src', 'modules', 'work')
+
+    // Line-based rather than a regex, and comment lines are dropped: both
+    // projects.routes.js and linked-bugs.js explain in prose the require this
+    // is asserting the absence of.
+    const offenders = fs.readdirSync(dir)
+      .filter((f) => f.endsWith('.js'))
+      .filter((f) => fs.readFileSync(path.join(dir, f), 'utf8')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => !l.startsWith('//') && !l.startsWith('*') && !l.startsWith('/*'))
+        .some((l) => l.includes("require('../defects')")))
+
+    assert.deepStrictEqual(offenders, [], `work still requires defects in: ${offenders.join(', ')}`)
   })
 
   console.log(failures ? `\n${failures} failure(s)\n` : '\nAll port checks passed\n')

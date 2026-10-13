@@ -4,15 +4,20 @@
 // function is async, so call sites survive this module moving behind a network
 // boundary unchanged.
 //
-// work is the hub: four other modules read from it. That is why the accessors
-// below are deliberately narrow — a card lookup, a routing fact, an existence
-// check — rather than exposing rows. Nothing outside this module should know
-// that a project has a `manager_id` column.
+// work is the hub: seven other modules read from it (`npm run modules:graph`).
+// That is why the accessors below are deliberately narrow — a card lookup, a
+// routing fact, an existence check — rather than exposing rows. Nothing outside
+// this module should know that a project has a `manager_id` column.
+//
+// work reads NOTHING from defects. It used to, for the bug behind a linked
+// task, and that made the two a cycle; the question is now a port registered by
+// defects at boot. See linked-bugs.js.
 
 const repo = require('./repo')
 const analytics = require('./analytics.repo')
 const notifications = require('./notifications')
 const events = require('./events')
+const linkedBugs = require('./linked-bugs')
 
 exports.mount = [
   { path: '/api/projects', router: require('./projects.routes') },
@@ -370,3 +375,13 @@ exports.analytics = {
  */
 exports.checkProjectMilestone = async (projectId, excludeUserId) =>
   notifications.checkProjectMilestone(projectId, excludeUserId)
+
+/* ── The bug behind a task, asked for rather than reached for ───────────── */
+//
+// Registered once at boot by the module that owns bugs (defects). Until it is,
+// tasks render without their bug details and linked-bugs.js logs a warning —
+// deliberately not a throw: a task list must not fail to load because a sibling
+// module is unavailable, which stops being hypothetical the day defects is its
+// own service.
+exports.setBugCardProvider = linkedBugs.setBugCardProvider
+exports.hasBugCardProvider = linkedBugs.hasBugCardProvider
