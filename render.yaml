@@ -87,10 +87,28 @@ services:
         fromDatabase:
           name: varadhi-db
           property: connectionString
-      # Generated here and INHERITED by the worker via fromService. Both
-      # processes must hold the same secret: notification action tokens are
-      # signed with it, and a worker that signed them differently would mint
-      # links the API rejects.
+      # ─────────────────────────────────────────────────────────────────────
+      # THE MOST DESTRUCTIVE LINE IN THIS FILE. `generateValue: true` mints a
+      # NEW secret whenever it is applied, and the live service's secret was set
+      # in the dashboard, so applying this file would replace it. That instantly
+      # signs every existing session out, and invalidates every outstanding
+      # notification action link and password-reset token.
+      #
+      # It used to be worse. Until ENCRYPTION_KEY and PII_ENCRYPTION_KEY were
+      # both set explicitly (2026-10-13), an unset ENCRYPTION_KEY derived its key
+      # from JWT_SECRET — so a rotation also made every stored calendar OAuth
+      # token and Teams webhook URL undecryptable, silently, because
+      # platform/crypto.js returns null on a bad key rather than throwing. Both
+      # keys are now explicit, which is what cut that blast radius down to
+      # sessions and tokens.
+      #
+      # Rotating it deliberately is still a planned operation, not an edit. See
+      # docs/PRODUCTION-DEPLOYMENT.md §4 for the order.
+      #
+      # If the worker below is ever created by hand, give it the SAME value as
+      # the web service: notification action tokens are signed with this, and a
+      # worker signing them differently would mint links the API rejects.
+      # ─────────────────────────────────────────────────────────────────────
       - key: JWT_SECRET
         generateValue: true
       # Must be the real deployed frontend origin: it is both a CORS allowed
