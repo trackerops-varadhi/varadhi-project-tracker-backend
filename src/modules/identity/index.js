@@ -173,3 +173,14 @@ exports.REVOKE_REASONS = sessionService.REVOKE_REASONS
 exports.COOKIE_OPTIONS = cookies.COOKIE_OPTIONS
 exports.ACCESS_COOKIE = cookies.ACCESS_COOKIE
 exports.REFRESH_COOKIE = cookies.REFRESH_COOKIE
+
+/* ── What this module consumes ───────────────────────────────────────────── */
+//
+// GENERATED, and checked by `npm run lint:contracts`. Every name here is read
+// from another module's index.js, so this list IS this module's half of the
+// future HTTP contract: extract it and these become the calls its client makes.
+// Do not hand-edit — change the code, then run `npm run lint:contracts -- --write`.
+exports.consumes = {
+  notify: ['TYPES', 'dispatchToRoles'],
+  work: ['getTaskCountsByAssignee'],
+}

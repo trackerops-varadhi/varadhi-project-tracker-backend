@@ -20,6 +20,8 @@
     "test:security": "node scripts/security-audit.test.js",
     "lint:boundaries": "node scripts/check-boundaries.js",
     "modules:graph": "node scripts/check-boundaries.js --graph",
+    "lint:contracts": "node scripts/check-contracts.js",
+    "modules:contracts": "node scripts/check-contracts.js --surface",
     "test:ops": "node scripts/ops.test.js",
     "migrate": "node src/config/migrate-runner.js up",
     "migrate:status": "node src/config/migrate-runner.js status",

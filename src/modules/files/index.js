@@ -101,3 +101,15 @@ exports.removeDocument = async (documentId) => {
     console.error('[files] could not remove a mirrored document:', err.message)
   }
 }
+
+/* ── What this module consumes ───────────────────────────────────────────── */
+//
+// GENERATED, and checked by `npm run lint:contracts`. Every name here is read
+// from another module's index.js, so this list IS this module's half of the
+// future HTTP contract: extract it and these become the calls its client makes.
+// Do not hand-edit — change the code, then run `npm run lint:contracts -- --write`.
+exports.consumes = {
+  identity: ['getUserCards'],
+  notify: ['TYPES', 'dispatchToUsers'],
+  work: ['events', 'getProjectCards', 'getProjectMemberIds'],
+}

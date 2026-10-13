@@ -18,3 +18,14 @@ exports.mount = [
 // last module in the dependency order. If something ever needs a figure from
 // here, it almost certainly wants the underlying accessor on work or identity
 // instead.
+
+/* ── What this module consumes ───────────────────────────────────────────── */
+//
+// GENERATED, and checked by `npm run lint:contracts`. Every name here is read
+// from another module's index.js, so this list IS this module's half of the
+// future HTTP contract: extract it and these become the calls its client makes.
+// Do not hand-edit — change the code, then run `npm run lint:contracts -- --write`.
+exports.consumes = {
+  identity: ['getActiveUserCount', 'getActiveUsers', 'getUserCards'],
+  work: ['analytics'],
+}

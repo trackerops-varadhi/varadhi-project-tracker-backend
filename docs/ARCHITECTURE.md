@@ -201,6 +201,8 @@ Not a module — no routes, no tables, no business rules. The things every modul
 | `npm run lint` | eslint over the repo |
 | `npm run lint:boundaries` | no module reaches past another's `index.js`, and no **new** dependency cycle (§9) |
 | `npm run modules:graph` | prints the cross-module dependency graph and what is extractable |
+| `npm run lint:contracts` | every module's `consumes` manifest matches what its code calls |
+| `npm run modules:contracts` | prints the measured cross-module surface — the future HTTP API |
 | `npm run test:ports` | the org-chart port is wired, and `workforce` does not require `people` (§9) |
 | `npm run test:isolation` | pools read their own tables; cross-module unqualified names raise |
 | `npm run schema:doc:check` | `docs/SCHEMA.md` matches the database |
@@ -271,6 +273,9 @@ A Render `worker` is not on the free plan.
 ---
 
 ## 9. Extracting a module — what the graph says
+
+The target shape — five services, the database in three stages, and the order to get there — is in
+**`docs/MICROSERVICES-TARGET.md`**. This section is the measurement it is built on.
 
 ```bash
 npm run modules:graph      # the full dependency graph and extraction ranking

@@ -58,3 +58,16 @@ exports.subscribe = () => {
 
 // Test seam, like defects' runSlaSweepNow.
 exports.runInterviewFeedbackReminderNow = () => jobs.runInterviewFeedbackReminderNow()
+
+/* ── What this module consumes ───────────────────────────────────────────── */
+//
+// GENERATED, and checked by `npm run lint:contracts`. Every name here is read
+// from another module's index.js, so this list IS this module's half of the
+// future HTTP contract: extract it and these become the calls its client makes.
+// Do not hand-edit — change the code, then run `npm run lint:contracts -- --write`.
+exports.consumes = {
+  files: ['getFileExtension', 'sanitizeFileName'],
+  identity: ['InviteError', 'getAccountState', 'getActiveUserCount', 'getActiveUsers', 'getUserCards', 'inviteUser', 'searchUserIds'],
+  notify: ['TYPES', 'dispatch', 'dispatchToRoles'],
+  workforce: ['getLeaveOverlapping', 'getPresenceByDate', 'setReportingManagerResolver'],
+}
