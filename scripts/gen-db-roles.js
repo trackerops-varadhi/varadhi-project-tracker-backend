@@ -126,22 +126,52 @@ const roleBlock = (service) => {
   return lines.join('\n')
 }
 
+/** (role, schema) pairs for the VERIFY query, from the same service map. */
+const ownedValues = () =>
+  SERVICE_NAMES
+    .flatMap((service) => SERVICES[service].map((schema) => `  ('${roleFor(service)}', '${schema}')`))
+    .join(',\n')
+
 const footer = () => `
 COMMIT;
 
 -- =========================================================================
 -- VERIFY — read-only, run after the COMMIT above.
 -- =========================================================================
--- Every service role, and the schemas it may use. Each role must show ONLY its
--- own schemas plus \`extensions\`.
+-- How many TABLES each role can actually read, inside the schemas it owns and
+-- outside them. \`outside_readable\` must be 0 for every role. That is the whole
+-- claim, stated as a number.
+--
+-- This deliberately does NOT list the schemas each role may USE. That was the
+-- first version of this query and it misled: every role shows \`public\` there,
+-- because Postgres grants USAGE on schema \`public\` to the pseudo-role PUBLIC and
+-- every role inherits it. It cannot be revoked from one role — only from PUBLIC,
+-- globally, which would also hit the migration role and the platform's own
+-- roles. It is not a hole either, because schema USAGE grants nothing readable
+-- without a table privilege, and none is granted in \`public\` here. The query
+-- below proves that instead of arguing it.
+WITH owned(role, nsp) AS (VALUES
+${ownedValues()}
+),
+tabs AS (
+  SELECT n.nspname AS nsp, c.oid
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE c.relkind = 'r'
+     AND n.nspname NOT LIKE 'pg\\_%'
+     AND n.nspname <> 'information_schema'
+)
 SELECT r.rolname AS role,
-       string_agg(n.nspname, ', ' ORDER BY n.nspname) AS usable_schemas
+       count(*) FILTER (
+         WHERE has_table_privilege(r.rolname, t.oid, 'SELECT') AND o.nsp IS NOT NULL
+       ) AS own_readable,
+       count(*) FILTER (
+         WHERE has_table_privilege(r.rolname, t.oid, 'SELECT') AND o.nsp IS NULL
+       ) AS outside_readable
   FROM pg_roles r
-  CROSS JOIN pg_namespace n
+  CROSS JOIN tabs t
+  LEFT JOIN owned o ON o.role = r.rolname AND o.nsp = t.nsp
  WHERE r.rolname LIKE 'svc\\_%'
-   AND n.nspname NOT LIKE 'pg\\_%'
-   AND n.nspname <> 'information_schema'
-   AND has_schema_privilege(r.rolname, n.nspname, 'USAGE')
  GROUP BY r.rolname
  ORDER BY r.rolname;
 

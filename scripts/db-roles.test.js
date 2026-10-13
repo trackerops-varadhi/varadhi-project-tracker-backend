@@ -121,6 +121,33 @@ async function main() {
       check(`${service}: is refused on ${schema}`, refused, r.ok ? 'IT COULD READ IT' : `got ${r.code}`)
     }
 
+    // `public` needs its own assertion rather than a probe, for two reasons.
+    //
+    // Postgres grants USAGE on schema `public` to the pseudo-role PUBLIC, so
+    // every role inherits it and it shows up in any schema-privilege listing.
+    // It cannot be revoked per-role — only from PUBLIC, globally, which would
+    // also hit the migration role. So the grant stays and the control is at
+    // table level: USAGE on a schema reads nothing without a table privilege.
+    //
+    // And `public` holds 29 shadow copies of the module tables on dev. A role
+    // that could read one would see a plausible, empty version of its own data,
+    // which is the failure mode the 2026-10-05 search_path change exists to
+    // prevent. So: name the tables if any are readable, rather than counting.
+    const { rows: leaks } = await client.query(`
+      SELECT n.nspname || '.' || c.relname AS name
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'public'
+         AND c.relkind = 'r'
+         AND has_table_privilege(current_user, c.oid, 'SELECT')
+       ORDER BY 1
+    `)
+    check(
+      `${service}: cannot read any table in public`,
+      leaks.length === 0,
+      leaks.length ? `readable: ${leaks.map((r) => r.name).join(', ')}` : ''
+    )
+
     await client.end().catch(() => {})
     console.log('')
   }
