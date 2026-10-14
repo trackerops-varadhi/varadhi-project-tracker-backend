@@ -193,6 +193,7 @@ wins):
 | Start command | `npm start` → `node src/server.js` | `package.json` |
 | Health check path | `/health` | `render.yaml` — liveness, no database |
 | Instances | **one** | see `RATE_LIMIT_STORE` below |
+| Instance type | **free hibernates after ~15 min idle** | this caused the 2026-10-14 lockout — see §11 |
 
 ### Environment variables
 
@@ -212,6 +213,7 @@ Required, by name only — never paste values into tickets, commits or chat:
 | `NOTIFICATION_ACTION_TTL_HOURS` | `72` | optional |
 | `RATE_LIMIT_STORE` | unset, or `postgres` | set to `postgres` only after `identity.rate_limit_buckets` exists; **mandatory before a second instance** |
 | `MULTI_INSTANCE` | unset | with the memory store this refuses to boot, by design |
+| `LOGIN_RATE_LIMIT_MAX` | unset (⇒ 20 per 15 min per client IP) | **raise it if the office shares one NAT address** — every person's login counts against the same bucket, successes included. See §11 |
 
 ---
 
@@ -360,3 +362,88 @@ work — plan rollback as "restore dump **and** redeploy previous build".
 | Supabase connection ceiling vs 8 pools | degraded | §2.2, use the pooler host |
 | `RATE_LIMIT_STORE=postgres` before migration 0002 | boot failure | set it after migrating |
 | Second instance with the memory store | refuses to boot (by design) | set `RATE_LIMIT_STORE=postgres` first |
+| Free instance hibernating overnight | **everyone locked out, reported as a wrong password** | §11 — paid instance, keep-warm workflow, client-side retry |
+| Whole office behind one NAT vs the 20/15min login ceiling | user-visible lockout | §11 — raise `LOGIN_RATE_LIMIT_MAX` |
+
+---
+
+## 11. Hibernation, cold starts and 429s
+
+**Symptom (2026-10-14).** Nobody in the office could sign in. The login form said
+`Invalid email or password. Try again.` for every correct credential. The browser console
+showed the truth:
+
+```
+GET  /api/auth/me    429 (Too Many Requests)
+POST /api/auth/login 429 (Too Many Requests)
+```
+
+**That 429 was Render's, not this application's.** Two facts identify it immediately:
+
+* `/api/auth/me` is **not rate limited by this application at all** — it is only behind
+  `protect` (`src/modules/identity/auth.routes.js`). A 429 from it cannot be ours.
+* The response headers carry `X-Render-Routing: hibernate-rate-limited` and a plain-text
+  body (`Too Many Requests`), not the standard `{ success, message, data }` envelope.
+  `Server: Vercel` is just the same-origin proxy relaying it.
+
+A free-tier Render instance spins down after ~15 minutes of inactivity. The first person
+in the morning does not send one request — the session probe, the login POST and then the
+dashboard's queries all arrive at a sleeping instance, and Render's router **sheds the
+burst** instead of queueing it. Express never runs, so neither the login limiter nor the
+password check is ever reached. The form blamed passwords only because it fell back to a
+password error when the body carried no `message`.
+
+### Diagnose it in one command
+
+```bash
+curl -D - -o /dev/null https://varadhi-project-tracker.onrender.com/api/auth/me
+```
+
+| What comes back | Meaning |
+|---|---|
+| `429` + `x-render-routing: hibernate-rate-limited` | hibernation. Not an auth problem. Re-run the curl to wake it, then retry the login |
+| `401` + `{"success":false,...,"code":"NO_TOKEN"}` | the API is healthy; an anonymous request is *supposed* to get this |
+| `429` + an envelope body with `code: rate_limited` | genuinely our limiter — see `LOGIN_RATE_LIMIT_MAX` below |
+| no response / 502 / 503 | the instance is down or still cold, not throttled |
+
+Then confirm the backend and database themselves:
+
+```bash
+curl -s https://varadhi-project-tracker.onrender.com/health
+curl -s https://varadhi-project-tracker.onrender.com/health/ready
+```
+
+`/health/ready` must report `"status":"ready"` with all schemas and pools resolved
+(8 of 8 on 2026-10-14). If it does, nothing is wrong with the database and the problem is
+in front of the application.
+
+### Fixes, in order of how much they actually solve
+
+1. **Stop the instance hibernating — the only real fix.** A Render *Starter* instance does
+   not spin down and has no 750 instance-hours/month ceiling. Everything below is a
+   cushion for staying on free.
+2. **`.github/workflows/keep-warm.yml`** pings `/health` every 10 minutes, Mon–Sat
+   02:00–15:59 UTC (07:30–21:29 IST), so the instance is already awake during working
+   hours. Deliberately not 24/7: that would consume ~744 of the 750 free hours. Two
+   honest limits — GitHub's scheduled runs can be delayed past the 15-minute idle window,
+   and GitHub disables schedules in a repository with no commits for 60 days. An external
+   uptime monitor is more reliable for the same cost and also alerts on downtime.
+3. **The frontend now retries through a cold start instead of lying about it**
+   (`varadhi-tracker/src/lib/api-error.js`, `api-client.js`, `session-recovery.js`): an
+   edge 429 or a 502/503/504 with a non-envelope body is retried with backoff — safe,
+   because a shed request was never processed — and whatever still fails is described
+   honestly rather than as a credential error. The first request of the day is now slow,
+   not fatal.
+
+### When it really is our limiter
+
+`LOGIN_RATE_LIMIT_MAX` defaults to **20 requests per 15 minutes per client IP**, and the
+key is the leftmost `X-Forwarded-For` entry — the real browser IP, not Vercel's edge
+(`clientKey` in `auth.routes.js`). If the whole office shares one NAT address, every
+person's login — **successful ones included** — counts against the same bucket of 20.
+Raise it in the Render dashboard (e.g. `LOGIN_RATE_LIMIT_MAX=100`) rather than letting a
+morning rush, or a round of retries after an incident like this one, look like an attack.
+
+That 429 is distinguishable from Render's at a glance: it carries our envelope, a
+`Retry-After` header and `data.code = "rate_limited"`, and the frontend shows its message
+verbatim.
