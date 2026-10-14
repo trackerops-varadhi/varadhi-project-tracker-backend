@@ -362,7 +362,7 @@ work — plan rollback as "restore dump **and** redeploy previous build".
 | Supabase connection ceiling vs 8 pools | degraded | §2.2, use the pooler host |
 | `RATE_LIMIT_STORE=postgres` before migration 0002 | boot failure | set it after migrating |
 | Second instance with the memory store | refuses to boot (by design) | set `RATE_LIMIT_STORE=postgres` first |
-| Free instance hibernating overnight | **everyone locked out, reported as a wrong password** | §11 — paid instance, keep-warm workflow, client-side retry |
+| Free instance hibernating outside the warm window | slow first request (was: everyone locked out, reported as a wrong password) | §11 — keep-warm workflow + client-side retry; paid instance declined 2026-10-14 |
 | Whole office behind one NAT vs the 20/15min login ceiling | user-visible lockout | §11 — raise `LOGIN_RATE_LIMIT_MAX` |
 
 ---
@@ -417,23 +417,38 @@ curl -s https://varadhi-project-tracker.onrender.com/health/ready
 (8 of 8 on 2026-10-14). If it does, nothing is wrong with the database and the problem is
 in front of the application.
 
-### Fixes, in order of how much they actually solve
+### Fixes — the deployment is staying on the free tier
 
-1. **Stop the instance hibernating — the only real fix.** A Render *Starter* instance does
-   not spin down and has no 750 instance-hours/month ceiling. Everything below is a
-   cushion for staying on free.
-2. **`.github/workflows/keep-warm.yml`** pings `/health` every 10 minutes, Mon–Sat
-   02:00–15:59 UTC (07:30–21:29 IST), so the instance is already awake during working
-   hours. Deliberately not 24/7: that would consume ~744 of the 750 free hours. Two
-   honest limits — GitHub's scheduled runs can be delayed past the 15-minute idle window,
-   and GitHub disables schedules in a repository with no commits for 60 days. An external
-   uptime monitor is more reliable for the same cost and also alerts on downtime.
-3. **The frontend now retries through a cold start instead of lying about it**
-   (`varadhi-tracker/src/lib/api-error.js`, `api-client.js`, `session-recovery.js`): an
-   edge 429 or a 502/503/504 with a non-envelope body is retried with backoff — safe,
-   because a shed request was never processed — and whatever still fails is described
-   honestly rather than as a credential error. The first request of the day is now slow,
-   not fatal.
+Decided 2026-10-14: **no paid instance.** A Render *Starter* instance would remove this
+whole class of problem (no hibernation, no 750 instance-hours ceiling) and that remains the
+one-step answer if hibernation ever becomes intolerable — but it was declined, so the two
+mitigations below are the real defence, not a stopgap. Both shipped the same day.
+
+1. **`.github/workflows/keep-warm.yml`** keeps the instance out of hibernation during
+   working hours: a scheduled run every 10 minutes, Mon–Sat 02:00–15:59 UTC
+   (07:30–21:29 IST), and **each run pings every 3 minutes for ~9 minutes** so a late
+   GitHub schedule still covers the gap it was late for. Working hours only because 24/7
+   is ~744 of the 750 free instance-hours and running out suspends the service mid-month;
+   this window is ~364. Actions minutes are free here because the repository is public —
+   making it private would start billing the long job. One weakness remains: GitHub
+   disables schedules in a repository with no commits for 60 days (with an email warning).
+   An external monitor (cron-job.org, UptimeRobot — free) has no such rule and alerts on
+   real downtime, so it is the better primary for anyone willing to own one more account.
+2. **The frontend rides out a cold start instead of lying about it.**
+   `varadhi-tracker/src/lib/api-error.js` decides whether a failure came from the
+   application (standard envelope with `message`) or from an edge in front of it (plain
+   text), so a password error is never reported for an infrastructure answer.
+   `api-client.js` retries an edge 429 for any method — a shed request was never processed,
+   so replaying it cannot duplicate anything, not even a login — and a 502/503/504 or a
+   client timeout for replayable methods only. `session-recovery.js` no longer reads an
+   edge rejection as "not signed in", which was showing a password prompt to users who
+   were still logged in. The login POST gets 30s, matching the refresh and the probe.
+   After six seconds both the sign-in button and the session probe say
+   *"Waking the server... please don't reload"* — a silent 40-second spinner is what made
+   people reload into the very burst Render sheds.
+
+Net effect on the free tier: outside the warm window the first visit of the day is slow
+(up to ~a minute) and explains itself. It is no longer a lockout.
 
 ### When it really is our limiter
 

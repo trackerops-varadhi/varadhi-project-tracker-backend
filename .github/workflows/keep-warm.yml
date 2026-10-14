@@ -23,38 +23,46 @@
 # hibernation; an envelope body (`{"success":false,...}`) means it really is us.
 #
 # WHAT THIS DOES
-# Pings /health often enough that the instance never goes idle long enough to
-# hibernate, so there is no cold burst for Render to shed.
+# Pings /health often enough that the instance never sits idle for the ~15
+# minutes it takes to hibernate, so there is no cold burst for Render to shed.
 #
-# WHAT THIS IS NOT
-# It is not the real fix, and it should not be mistaken for one. The real fix is
-# an instance type that does not hibernate (Render Starter), which also removes
-# the free tier's 750 instance-hours/month ceiling. Two honest limitations here:
+# THE DEPLOYMENT IS STAYING ON THE FREE TIER (decided 2026-10-14), so this is
+# the primary defence rather than a stopgap, and it is built accordingly:
 #
-#   * GitHub's scheduled runs are best-effort. A busy window can delay a run by
-#     10+ minutes, which is long enough for the instance to sleep anyway.
-#   * GitHub disables scheduled workflows in a repository with no commits for
-#     60 days. The sweeps would stop silently.
+#   * COVERAGE, NOT A SINGLE PING. GitHub's scheduled runs are best-effort and
+#     can start 10+ minutes late -- longer than the idle window this exists to
+#     stay inside, which would let the instance sleep between two "successful"
+#     runs. So each run pings every 3 minutes for ~9 minutes. A late run then
+#     still covers the gap it was late for, and three consecutive misses are
+#     needed to lose warmth rather than one.
+#   * OFF-PEAK MINUTES. The schedule fires at :04/:14/... rather than :00,
+#     because the top of the hour is when most of GitHub's cron load queues.
+#   * SERIALISED, NOT CANCELLED. `cancel-in-progress: false` means a tick that
+#     arrives while the previous run is still pinging waits its turn instead of
+#     killing it, which is what makes the coverage continuous.
 #
-# An external uptime monitor (cron-job.org, UptimeRobot, Better Stack) is more
-# reliable than this for the same cost, and it also alerts when the API is down.
+# Actions minutes: this repository is PUBLIC, and public repositories get
+# unmetered Actions minutes -- the long-running job below is free. If it is ever
+# made private, scheduled runs start billing against the 2,000 free
+# minutes/month and this needs cutting back to one short ping per run.
 #
 # WHY WORKING HOURS ONLY, NOT 24/7
 # A free web service has 750 instance-hours per month across the workspace, and
-# 24/7 is ~744 -- no headroom for a second service or a rebuild. This window is
-# 02:00-15:59 UTC = 07:30-21:29 IST, Monday to Saturday: roughly 364 hours a
-# month, which leaves the rest of the budget intact. Outside it the first
-# request of the day still wakes the instance, and the frontend now retries
-# through that (varadhi-tracker/src/lib/api-client.js) instead of showing a
-# password error.
+# 24/7 is ~744 -- no headroom, and running out suspends the service mid-month.
+# This window is 02:00-15:59 UTC = 07:30-21:29 IST, Monday to Saturday: roughly
+# 364 hours, which leaves the rest of the budget intact. Outside it the first
+# request of the day still wakes the instance, and the frontend now rides that
+# out instead of reporting a wrong password (varadhi-tracker/src/lib/api-error.js,
+# api-client.js, session-recovery.js) while telling the user the server is
+# waking rather than leaving them on a silent spinner.
 #
-# AFTER THE RENDER STARTER UPGRADE, SLACKEN THE SCHEDULE
-# A Starter instance does not hibernate, so the 10-minute cadence stops being
-# about warmth and becomes a readiness canary. Change the cron to `*/30 2-15 * * 1-6`
-# at that point. The reason is cost, not tidiness: on a PRIVATE repository
-# scheduled runs bill against the 2,000 free Actions minutes/month, and every-10
-# minutes is ~84 runs a day (~2,200 min/month) -- over the cap. Every 30 minutes
-# is ~730. Public repositories get unmetered Actions minutes and can leave it.
+# ONE REMAINING WEAKNESS, WORTH KNOWING: GitHub disables scheduled workflows in
+# a repository with no commits for 60 days, with an email warning first. If
+# work on this repo ever pauses for two months, re-enable it from the Actions
+# tab (or run it once with workflow_dispatch). An external uptime monitor
+# (cron-job.org, UptimeRobot -- both free) has no such rule and alerts when the
+# API is actually down, so it is the better primary if anyone is willing to own
+# one more account.
 #
 # NO SECRETS. /health is public, returns no data about anyone, and the URL is
 # already public. Override it with a repository variable BACKEND_URL if the
@@ -64,7 +72,7 @@ name: keep-warm
 
 on:
   schedule:
-    - cron: "*/10 2-15 * * 1-6"
+    - cron: "4,14,24,34,44,54 2-15 * * 1-6"
   workflow_dispatch:
 
 concurrency:
@@ -74,44 +82,52 @@ concurrency:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Comfortably longer than the ping loop, so a slow cold start cannot be
+    # mistaken for a hung job.
+    timeout-minutes: 15
+
+    env:
+      BACKEND_URL: ${{ vars.BACKEND_URL || 'https://varadhi-project-tracker.onrender.com' }}
 
     steps:
-      - name: Ping /health
-        env:
-          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://varadhi-project-tracker.onrender.com' }}
-        run: |
-          set -uo pipefail
-          # --max-time 90: a cold start on the free tier can take ~60s, and the
-          # whole point is to be the request that absorbs that wait instead of a
-          # user. --retry 3 with a delay covers the hibernate throttle itself,
-          # which clears once the container is actually up.
-          code=$(curl -s -o /tmp/health.json -w '%{http_code}' \
-                   --max-time 90 --retry 3 --retry-delay 10 --retry-all-errors \
-                   "$BACKEND_URL/health")
-          echo "GET $BACKEND_URL/health -> $code"
-          cat /tmp/health.json || true
-          echo
-          if [ "$code" != "200" ]; then
-            echo "::warning::health check returned $code"
-          fi
-
-      # Readiness is the one that would catch a real production problem: it
-      # proves the database answers and that all module schemas and pools
-      # resolved. A warm instance serving /health while /health/ready reports
-      # 0-of-N schemas is the exact failure mode the schema split introduced.
-      - name: Check /health/ready
-        env:
-          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://varadhi-project-tracker.onrender.com' }}
+      # Readiness first: it is the check that would catch a real production
+      # problem. It proves the database answers and that every module schema
+      # and pool resolved -- a warm instance serving /health while
+      # /health/ready reports 0-of-N schemas is the exact failure mode the
+      # schema split introduced.
+      #
+      # --max-time 120: on the free tier this request may be the one absorbing
+      # a cold start, which is the whole point -- better here than at a desk.
+      # --retry with --retry-all-errors covers the hibernate throttle itself,
+      # which clears as soon as the container is actually up.
+      - name: Readiness
         run: |
           set -uo pipefail
           code=$(curl -s -o /tmp/ready.json -w '%{http_code}' \
-                   --max-time 90 --retry 2 --retry-delay 10 --retry-all-errors \
+                   --max-time 120 --retry 3 --retry-delay 10 --retry-all-errors \
                    "$BACKEND_URL/health/ready")
-          echo "GET $BACKEND_URL/health/ready -> $code"
-          cat /tmp/ready.json || true
+          echo "GET /health/ready -> $code"
+          cat /tmp/ready.json 2>/dev/null || true
           echo
           if [ "$code" != "200" ]; then
-            echo "::error::readiness failed with $code -- the API is up but not serving"
+            echo "::error::readiness failed with $code -- the API is reachable but not serving"
             exit 1
           fi
+
+      # Spread across the gap to the next scheduled run, so a late or skipped
+      # tick does not become an idle window. Cheap: curl, then sleep.
+      - name: Hold it awake
+        run: |
+          set -uo pipefail
+          for i in 1 2 3; do
+            sleep 180
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "$BACKEND_URL/health")
+            echo "ping $i: GET /health -> $code"
+            # A failure here is not worth failing the run: the next scheduled
+            # run is minutes away, and a red cross on a keep-warm job trains
+            # people to ignore the Actions tab. Readiness above is the step
+            # that is allowed to shout.
+            if [ "$code" != "200" ]; then
+              echo "::warning::ping $i returned $code"
+            fi
+          done
