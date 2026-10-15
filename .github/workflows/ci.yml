@@ -117,36 +117,11 @@ jobs:
       - name: Schema isolation
         run: npm run test:isolation
 
-      # Each suite prints `  FAIL  <assertion>` lines and exits non-zero. Those
-      # lines are re-emitted as ::error:: annotations so a failure is readable
-      # from the checks UI and the API, instead of only by opening the log --
-      # which needs repository admin rights, and is what made the 2026-10-14
-      # investigation guess at a failure it could not read.
       - name: Offline suites
         run: |
-          set -uo pipefail
-          status=0
-          for suite in test:crypto test:ops-infra; do
-            echo "::group::$suite"
-            if out=$(npm run --silent "$suite" 2>&1); then
-              echo "$out"
-              echo "::endgroup::"
-            else
-              status=1
-              echo "$out"
-              echo "::endgroup::"
-              echo "$out" | grep -E "^[[:space:]]*FAIL" | head -20 | while IFS= read -r line; do
-                echo "::error title=$suite::$(echo "$line" | sed 's/^[[:space:]]*//')"
-              done
-              # A suite that died before asserting prints no FAIL line at all,
-              # so carry its last words out too.
-              if ! echo "$out" | grep -qE "^[[:space:]]*FAIL"; then
-                last=$(echo "$out" | tail -3 | paste -sd " " - | cut -c1-400)
-                echo "::error title=$suite::no FAIL line - last output: $last"
-              fi
-            fi
-          done
-          exit $status
+          set -euo pipefail
+          npm run test:crypto
+          npm run test:ops-infra
 
       - name: Docker image builds
         run: docker build --target runtime -t varadhi-backend:ci .
