@@ -362,7 +362,8 @@ work — plan rollback as "restore dump **and** redeploy previous build".
 | Supabase connection ceiling vs 8 pools | degraded | §2.2, use the pooler host |
 | `RATE_LIMIT_STORE=postgres` before migration 0002 | boot failure | set it after migrating |
 | Second instance with the memory store | refuses to boot (by design) | set `RATE_LIMIT_STORE=postgres` first |
-| Free instance hibernating outside the warm window | slow first request (was: everyone locked out, reported as a wrong password) | §11 — keep-warm workflow + client-side retry; paid instance declined 2026-10-14 |
+| Free instance hibernating outside the warm window | slow first request (was: everyone locked out, reported as a wrong password) | §11 — external uptime monitor + client-side retry; paid instance declined 2026-10-14 |
+| `keep-warm.yml` not on the default branch | **the schedule never fires, silently** | §11 — external monitor owns the pinging; GitHub reads schedules only from `main` |
 | Whole office behind one NAT vs the 20/15min login ceiling | user-visible lockout | §11 — raise `LOGIN_RATE_LIMIT_MAX` |
 
 ---
@@ -424,6 +425,16 @@ whole class of problem (no hibernation, no 750 instance-hours ceiling) and that 
 one-step answer if hibernation ever becomes intolerable — but it was declined, so the two
 mitigations below are the real defence, not a stopgap. Both shipped the same day.
 
+0. **An external uptime monitor is the primary pinger** (chosen 2026-10-15): cron-job.org,
+   `GET /health` every 10 minutes, 02:00–16:00 UTC Mon–Sat. It owns this job for two
+   reasons that are not preference. First, **a GitHub `schedule` only fires from the
+   workflow file on the repository's DEFAULT branch** — here that is `main`, while the
+   live code and `keep-warm.yml` are on the deployed branch, so the schedule is silently
+   ignored: the workflow appears in the Actions tab, `workflow_dispatch` works, and
+   nothing warns. Second, GitHub disables schedules in a repository with no commits for
+   60 days, and an external monitor also alerts when the API is actually down.
+   `keep-warm.yml` stays as a manual readiness check (`workflow_dispatch`) and becomes the
+   scheduled pinger for free the moment the default branch points at the deployed branch.
 1. **`.github/workflows/keep-warm.yml`** keeps the instance out of hibernation during
    working hours: a scheduled run every 10 minutes, Mon–Sat 02:00–15:59 UTC
    (07:30–21:29 IST), and **each run pings every 3 minutes for ~9 minutes** so a late

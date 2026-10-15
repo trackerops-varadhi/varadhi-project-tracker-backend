@@ -141,8 +141,8 @@ jobs:
               # A suite that died before asserting prints no FAIL line at all,
               # so carry its last words out too.
               if ! echo "$out" | grep -qE "^[[:space:]]*FAIL"; then
-                echo "::error title=$suite::no FAIL line — last output: $(echo "$out" | tail -3 | tr '
-' ' ' | cut -c1-400)"
+                last=$(echo "$out" | tail -3 | paste -sd " " - | cut -c1-400)
+                echo "::error title=$suite::no FAIL line - last output: $last"
               fi
             fi
           done
