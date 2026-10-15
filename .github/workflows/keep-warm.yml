@@ -68,6 +68,27 @@
 # already public. Override it with a repository variable BACKEND_URL if the
 # service is ever renamed.
 
+# ⚠ A SCHEDULE ONLY FIRES FROM THE DEFAULT BRANCH.
+#
+# GitHub runs `schedule` from the workflow file on the repository's DEFAULT
+# branch and nowhere else. This repository's default is `main`, while the live
+# code (and this file) is on `refactor/phase1-module-boundaries` -- the branch
+# Render deploys. So as committed here, this workflow NEVER fires on its own:
+# it shows up in the Actions tab, workflow_dispatch works, and the schedule is
+# silently ignored. There is no warning for this.
+#
+# Three ways to make it real, in increasing order of what they touch:
+#   1. Point the repository's default branch at the deployed branch
+#      (Settings -> Branches). Changes nothing about the code or the deploy;
+#      it only decides which branch GitHub reads schedules from, and arguably
+#      matches reality, since this is the branch that runs in production.
+#   2. Put THIS FILE on `main` as a file-only commit. Safe only while Render
+#      deploys the refactor branch -- Render's branch setting is the thing to
+#      check first, because a `main` deploy would ship the pre-split backend.
+#   3. Skip GitHub for this and use an external monitor (cron-job.org,
+#      UptimeRobot -- free). No default-branch rule, and it alerts on real
+#      downtime. Then this file stays as a manual readiness check.
+#
 name: keep-warm
 
 on:
