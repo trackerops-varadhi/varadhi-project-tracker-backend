@@ -15,8 +15,8 @@
  * cover the things THIS system gets to be wrong about:
  *
  *   - the baseline reproduces the post-split schema exactly — table count is
- *     DERIVED from the migration files rather than hardcoded, plus 21
- *     within-module FKs, 15 cascades and the sequence in defects
+ *     DERIVED from the migration files and the module list from the runner,
+ *     plus the within-module FK and cascade totals and the sequence in defects
  *   - no migration re-creates a cross-module foreign key, which is the whole
  *     point of the split and the easiest thing to undo by accident
  *   - no migration creates a shadow table in public, the failure split-guard.js
@@ -48,7 +48,18 @@ if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
   process.exit(1)
 }
 
-const MODULES = ['identity', 'work', 'defects', 'notify', 'integrations', 'files', 'workforce']
+/*
+ * The module list comes from the RUNNER, deliberately not from a copy here.
+ *
+ * This file used to keep its own array, and it silently fell a module behind
+ * when `people` (Module 9) shipped: the runner migrated eight modules while
+ * every expectation in this suite described seven, so CI failed on counts that
+ * were all correct about the old world. A second list is a second thing to
+ * forget. `migrate-runner.js` is the authority for which modules exist and in
+ * what order, and `applied in the declared order` below is precisely the
+ * assertion that it was followed.
+ */
+const { MODULES } = require(path.join(BACKEND, 'src', 'config', 'migrate-runner'))
 
 let pass = 0
 let fail = 0
@@ -97,8 +108,22 @@ const withinFks = () => scalar(
      JOIN pg_namespace sn ON sn.oid=sc.relnamespace
     WHERE con.contype='f' AND sn.nspname = ANY($1)`, [MODULES])
 
+/*
+ * Within-module cascades only, scoped the same way withinFks() is.
+ *
+ * This counted EVERY cascading FK in the database, which made it a test of
+ * whatever else happened to be installed -- an extension or a stray table in
+ * public would move the number. It passed only because nothing else here has
+ * one.
+ */
 const cascades = () => scalar(
-  `SELECT count(*)::int FROM pg_constraint WHERE contype='f' AND confdeltype='c'`)
+  `SELECT count(*)::int FROM pg_constraint con
+     JOIN pg_class s ON s.oid = con.conrelid
+     JOIN pg_namespace sn ON sn.oid = s.relnamespace
+     JOIN pg_class t ON t.oid = con.confrelid
+     JOIN pg_namespace tn ON tn.oid = t.relnamespace
+    WHERE con.contype='f' AND con.confdeltype='c'
+      AND sn.nspname = tn.nspname AND sn.nspname = ANY($1)`, [MODULES])
 
 const duplicateTables = () => scalar(
   `SELECT count(*)::int FROM (
@@ -135,11 +160,18 @@ const migrationsOf = (mod) => {
 const expectedMigrations = () =>
   MODULES.reduce((n, m) => n + migrationsOf(m).length, 0)
 
-/** Tables the migration files themselves claim to create. */
-const expectedTables = () => {
+/**
+ * Tables the migration files themselves claim to create.
+ *
+ * `keep` narrows it to a subset of the files — phase 8 needs "everything
+ * except the baselines", because after baselining, those are the only tables a
+ * later `up` is allowed to add.
+ */
+const expectedTables = (keep = () => true, mods = MODULES) => {
   let n = 0
-  for (const mod of MODULES) {
+  for (const mod of mods) {
     for (const f of migrationsOf(mod)) {
+      if (!keep(f)) continue
       const src = fs.readFileSync(path.join(MIGRATIONS, mod, f), 'utf8')
       // Anchored to the start of a line so the phrase "pgm.createTable(...)"
       // inside each baseline's explanatory comment is not counted as a table —
@@ -150,6 +182,35 @@ const expectedTables = () => {
   }
   return n
 }
+
+/*
+ * FK TOPOLOGY TRIPWIRES, and why these two are hardcoded when everything else
+ * here is derived.
+ *
+ * A table count can be read off the migration files; a foreign-key graph
+ * cannot be, not without reimplementing enough of node-pg-migrate to resolve
+ * shorthands and addConstraint calls -- and an expectation derived by a buggy
+ * parser passes for the wrong reason, which is worse than one that has to be
+ * edited. So these stay explicit, and the point of them is to notice a
+ * relationship being dropped during a schema move.
+ *
+ * Re-measure after adding a module (the delta must be that module's own
+ * tables -- if an existing module's count fell, something was lost):
+ *
+ *   SELECT sn.nspname, count(*) FILTER (WHERE con.confdeltype='c') AS cascades,
+ *          count(*) AS fks
+ *     FROM pg_constraint con
+ *     JOIN pg_class s ON s.oid=con.conrelid JOIN pg_namespace sn ON sn.oid=s.relnamespace
+ *     JOIN pg_class t ON t.oid=con.confrelid JOIN pg_namespace tn ON tn.oid=t.relnamespace
+ *    WHERE con.contype='f' AND sn.nspname=tn.nspname GROUP BY 1 ORDER BY 1;
+ *
+ * 2026-10-15: 23 and 17 across eight modules. They were 21 and 15 for seven;
+ * `people` accounts for the entire difference with 2 FKs, both cascading
+ * (identity 4/2, work 3/3, defects 5/3, notify 3/2, integrations 5/5,
+ * files 1/0, workforce 0/0, people 2/2).
+ */
+const WITHIN_MODULE_FKS = 23
+const WITHIN_MODULE_CASCADES = 17
 
 /* ── Tests ────────────────────────────────────────────────────────────────── */
 
@@ -172,15 +233,18 @@ async function main() {
   // so this must not assume 1. Built with the RegExp constructor and explicit
   // double backslashes: a template literal eats `\s` and `\d`.
   const order = MODULES.filter((m) => new RegExp(`${m}\\s+up \\d+:`).test(up.out))
-  check('all 7 modules applied', order.length === 7, order.join(','))
+  check(`all ${MODULES.length} modules applied`, order.length === MODULES.length,
+    order.join(','))
   check('applied in the declared order', order.join(',') === MODULES.join(','), order.join(','))
 
   const EXPECTED_TABLES = expectedTables()
   check(`${EXPECTED_TABLES} module tables created (derived from the migration files)`,
     await tableCount() === EXPECTED_TABLES,
     `${await tableCount()} vs ${EXPECTED_TABLES}`)
-  check('21 within-module foreign keys', await withinFks() === 21, String(await withinFks()))
-  check('15 cascades preserved', await cascades() === 15, String(await cascades()))
+  check(`${WITHIN_MODULE_FKS} within-module foreign keys`,
+    await withinFks() === WITHIN_MODULE_FKS, String(await withinFks()))
+  check(`${WITHIN_MODULE_CASCADES} cascades preserved`,
+    await cascades() === WITHIN_MODULE_CASCADES, String(await cascades()))
   check('bug_number_seq lives in defects',
     await scalar(`SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
                    WHERE c.relkind='S' AND c.relname='bug_number_seq'`) === 'defects')
@@ -231,7 +295,7 @@ async function main() {
   // with it, and node-pg-migrate then failed deleting its own row.
   const ledgersLeft = await scalar(
     `SELECT count(*)::int FROM pg_class WHERE relname='pgmigrations'`)
-  check('ledgers SURVIVE the rollback', ledgersLeft === 7,
+  check('ledgers SURVIVE the rollback', ledgersLeft === MODULES.length,
     `${ledgersLeft} — down must not drop the schema holding its own history`)
   for (const m of MODULES) {
     check(`${m.padEnd(13)} ledger emptied`, await ledgerRows(m) === 0,
@@ -245,7 +309,8 @@ async function main() {
   check(`${EXPECTED_TABLES} tables again`, await tableCount() === EXPECTED_TABLES,
     String(await tableCount()))
   check('still zero cross-module FKs', await crossModuleFks() === 0)
-  check('still 21 within-module FKs', await withinFks() === 21, String(await withinFks()))
+  check(`still ${WITHIN_MODULE_FKS} within-module FKs`,
+    await withinFks() === WITHIN_MODULE_FKS, String(await withinFks()))
 
   /* 7. failure leaves the module untouched */
   console.log('\n7. A failing migration rolls its module back completely')
@@ -290,41 +355,100 @@ async function main() {
   /* 8. baseline */
   console.log('\n8. Baseline marks without executing')
   {
-    await reset()
-    // Simulate an already-provisioned database: create the schemas and one
-    // table by hand, the way dev and production already look.
-    for (const m of MODULES) await pool.query(`CREATE SCHEMA "${m}"`)
-    await pool.query('CREATE TABLE identity.users (id uuid PRIMARY KEY)')
-    const handmade = await tableCount()
+    /*
+     * THE FIXTURE IS THE TEST HERE, so it is built to match the database this
+     * command actually ran against on 2026-10-09, not a convenient stub.
+     *
+     * It used to create the eight schemas by hand plus a one-column
+     * `identity.users`, which worked only while identity/0002 was the sole
+     * non-baseline migration. Every later migration that ALTERS a baseline
+     * table failed on a fixture that never had the table:
+     * 0003_hr_role wanted `users_role_check`, work/0002 wanted `work.tasks`.
+     * Those failures said nothing about the migration system.
+     *
+     * A pre-split database is exactly: every table the old provisioner made,
+     * no ledger anywhere, and NO `people` schema — people was born after the
+     * split. So build it that way: migrate fully, drop people, drop the
+     * ledgers. What `baseline` then has to get right is the real thing it was
+     * written for.
+     */
+    /*
+     * A module whose first migration is a *_baseline is a TRANSCRIPT of what
+     * the old provisioner already built; any other first migration means the
+     * module was born after the split and its tables were never there to
+     * baseline. That distinction is read from the files, so a ninth module
+     * lands on whichever side it belongs to without editing this test.
+     */
+    const BASELINEABLE = MODULES.filter((m) => /_baseline\.js$/.test(migrationsOf(m)[0] || ''))
+    const POST_SPLIT = MODULES.filter((m) => !BASELINEABLE.includes(m))
 
+    await reset()
+    // --count 1 applies each module's 0001 and nothing after it, which is the
+    // state the old provisioner left behind. Running a FULL up here instead
+    // was the second mistake in this fixture: it also created the later
+    // migrations' tables, so the `up` below re-ran 0002 against them and died
+    // on `relation "rate_limit_buckets" already exists`.
+    const prep = runner(['up', '--count', '1'])
+    check('fixture provisions cleanly', prep.ok, prep.out.slice(-160))
+    for (const m of POST_SPLIT) await pool.query(`DROP SCHEMA IF EXISTS "${m}" CASCADE`)
+    for (const m of BASELINEABLE) {
+      await pool.query(`DROP TABLE IF EXISTS "${m}"."pgmigrations"`)
+    }
+    const provisioned = await tableCount()
+    const preSplitTables = expectedTables((f) => /^0001_/.test(f), BASELINEABLE)
+    check('fixture looks pre-split (0001 tables only, no ledger, no post-split module)',
+      provisioned === preSplitTables && (await ledgerRows('identity')) === null,
+      `${provisioned} tables vs ${preSplitTables},`
+      + ` identity ledger ${await ledgerRows('identity')}`)
+
+    /*
+     * `people/0001_people_core` is a real migration that creates tables, so
+     * marking it applied would leave the ledger claiming tables that do not
+     * exist — the runner skips it by design and says so.
+     */
     const b = runner(['baseline'])
     check('baseline exits 0', b.ok, b.out.slice(-200))
-    check('reports 7 modules baselined', /7 module\(s\) baselined/.test(b.out), b.out.slice(-160))
-    check('it did NOT create the 29 tables', await tableCount() === handmade,
-      `${handmade} -> ${await tableCount()} — baseline must not execute the body`)
+    check(`reports ${BASELINEABLE.length} modules baselined`,
+      b.out.includes(`${BASELINEABLE.length} module(s) baselined`), b.out.slice(-160))
+    check('says why a post-split module was skipped',
+      /is not a baseline — skipped/.test(b.out), b.out.slice(-200))
+    check(`it did NOT create the ${expectedTables()} tables`,
+      await tableCount() === provisioned,
+      `${provisioned} -> ${await tableCount()} — baseline must not execute the body`)
     for (const m of MODULES) {
-      // baseline marks ONLY the first migration, whatever else the module has.
-      check(`${m.padEnd(13)} marked applied (0001 only)`, await ledgerRows(m) === 1,
-        String(await ledgerRows(m)))
+      // baseline marks ONLY the first migration, whatever else the module has
+      // — and nothing at all for a module it skipped.
+      const want = BASELINEABLE.includes(m) ? 1 : null
+      check(`${m.padEnd(13)} ledger ${want === null ? 'untouched' : 'marked applied (0001 only)'}`,
+        await ledgerRows(m) === want, String(await ledgerRows(m)))
     }
+
+    /*
+     * A later `up` is not a no-op, and that is the entire point of baselining:
+     * an existing database skips the provisioning step and then keeps up with
+     * everything since. Pending = every migration except the baselines that
+     * were just marked, which includes ALL of a post-split module's.
+     */
     const after = runner(['up'])
-    // The baseline marks ONLY 0001. Anything after it is a real pending
-    // migration and MUST still apply — that is the entire point of baselining:
-    // an existing database skips the provisioning step and then keeps up with
-    // everything since. So a later `up` is not a no-op unless 0001 is all there
-    // is.
-    const pendingAfterBaseline = expectedMigrations() - MODULES.length
-    check(`a later up applies the ${pendingAfterBaseline} non-baseline migration(s)`,
+    const pendingAfterBaseline = expectedMigrations() - BASELINEABLE.length
+    check(`a later up applies the ${pendingAfterBaseline} pending migration(s)`,
       after.out.includes(`${pendingAfterBaseline} migration(s) applied`),
       after.out.slice(-200))
+    /*
+     * The delta is TABLES, not migrations. This asserted one table per
+     * migration — true when identity/0002 was the only pending one, false the
+     * moment 0003_hr_role shipped, which creates none.
+     */
     check('it did NOT re-provision the baseline tables',
-      await tableCount() === handmade + pendingAfterBaseline,
-      `${handmade} -> ${await tableCount()}, expected +${pendingAfterBaseline}`)
+      await tableCount() === expectedTables(),
+      `${provisioned} -> ${await tableCount()}, expected ${expectedTables()}`)
+    check('and the schema is whole again', await crossModuleFks() === 0
+      && await withinFks() === WITHIN_MODULE_FKS, String(await withinFks()))
 
     // Baseline must refuse to paper over an existing history.
     const b2 = runner(['baseline'])
     check('re-baselining is refused as already-recorded',
-      /already has 1 ledger row/.test(b2.out), b2.out.slice(-200))
+      /already has \d+ ledger row/.test(b2.out), b2.out.slice(-200))
   }
 
   /* 9. target guards */
