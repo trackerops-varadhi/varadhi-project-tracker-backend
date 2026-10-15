@@ -54,14 +54,39 @@ console.log('\n3. Tamper detection (GCM auth tag)')
   const blob = crypto.encrypt(SECRET)
   const [v, iv, tag, data] = blob.split(':')
 
-  const flipLast = (s) => s.slice(0, -1) + (s.slice(-1) === 'A' ? 'B' : 'A')
+  /*
+   * TAMPER WITH BYTES, NOT WITH CHARACTERS.
+   *
+   * This used to swap the last base64url character ('A' <-> 'B'), which is not
+   * reliably a change at all: base64url carries DON'T-CARE BITS whenever the
+   * payload length is not a multiple of 3. A 2-byte final group spends 3
+   * characters on 16 bits, so the last character's low 2 bits are padding that
+   * the decoder discards, and 'A' (0) and 'B' (1) differ only in those bits.
+   * The "altered" blob then decoded to the ORIGINAL bytes, GCM verified it
+   * happily, decrypt returned the plaintext and the assertion failed -- while
+   * the code under test had behaved perfectly.
+   *
+   * It was flaky rather than broken, which is worse: measured at 2000
+   * iterations, the ciphertext case slipped through 7.3% of the time (the last
+   * character is 'A' once every 16 blobs) and the 16-byte auth tag, whose final
+   * group is a single byte with 4 don't-care bits, 25.5% of the time. The suite
+   * as a whole failed about 31% of runs. CI run 12 on 2026-10-15 was one of
+   * them, and the two green runs before it were luck.
+   *
+   * Flipping every bit of the last decoded byte cannot be a no-op: 0 of 2000.
+   */
+  const tamper = (b64url) => {
+    const bytes = Buffer.from(b64url, 'base64url')
+    bytes[bytes.length - 1] ^= 0xff
+    return bytes.toString('base64url')
+  }
 
   check('altered ciphertext returns null, never garbage',
-    crypto.decrypt([v, iv, tag, flipLast(data)].join(':')) === null)
+    crypto.decrypt([v, iv, tag, tamper(data)].join(':')) === null)
   check('altered auth tag returns null',
-    crypto.decrypt([v, iv, flipLast(tag), data].join(':')) === null)
+    crypto.decrypt([v, iv, tamper(tag), data].join(':')) === null)
   check('altered IV returns null',
-    crypto.decrypt([v, flipLast(iv), tag, data].join(':')) === null)
+    crypto.decrypt([v, tamper(iv), tag, data].join(':')) === null)
   check('unknown version refused rather than guessed',
     crypto.decrypt(['v99', iv, tag, data].join(':')) === null)
   check('malformed blob returns null', crypto.decrypt('not-a-blob') === null)
